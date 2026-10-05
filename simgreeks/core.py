@@ -130,44 +130,66 @@ def _cheb_eval(x: np.ndarray, fit) -> np.ndarray:
 class LSMResult:
     Y_naive: np.ndarray   # discounted pathwise payoff from the estimated tau, eq. (24)
     Y_vf: np.ndarray      # discounted value function from t_1 (Section 3.2)
+    itm_fits: dict        # t_j -> in-the-money continuation fit (None if too few ITM)
+    t1_fit_all: tuple     # all-path continuation fit at t_1
 
 
-def lsm(spec: PutSpec, S: np.ndarray, M_tau: int = 9) -> LSMResult:
+def lsm(spec: PutSpec, S: np.ndarray, M_tau: int = 9, itm_fits: dict | None = None,
+        t1_fit_all=None, vf_rule: str = "itm") -> LSMResult:
     """Longstaff-Schwartz backward induction on paths S (N x (J+1)), S[:,0]=X.
 
     Exercise decisions at t_1..t_{J-1} use a cross-sectional regression of order
     ``M_tau`` on in-the-money paths only, eq. (5)-(6). No exercise at t_0.
 
-    Value function variant (Section 3.2): at t_1 the payoff is replaced by
-    V(t_1) = Z(t_1) if the LSM rule exercises and the estimated continuation
-    value otherwise. The continuation value used here is fitted on *all* paths
-    at t_1 so that it is also defined for out-of-the-money paths (their
-    exercise value is zero and they are never exercised).
+    ``itm_fits`` maps exercise dates j to stored fits: those dates re-apply the
+    stored rule instead of re-estimating it (2-step method, Section 3.4). Dates
+    not in the dict are estimated from S. ``t1_fit_all`` likewise reuses a stored
+    all-path continuation fit at t_1 instead of refitting it.
+
+    Value function variant (Section 3.2): Y_vf = e^{-r dt} V(t_1) with the
+    continuation value C(t_1) fitted on *all* paths (so it is defined for
+    out-of-the-money paths too) and
+      vf_rule="itm": V = Z if the LSM in-the-money rule exercises, else C;
+      vf_rule="max": V = max(Z, C).
     """
     N, Jp1 = S.shape
     J = Jp1 - 1
     disc = np.exp(-spec.r * spec.dt)
     cash = spec.payoff(S[:, J])
+    itm_fits = dict(itm_fits or {})
+    used_fits = {}
     Y_vf = None
+    fit_all = None
     for j in range(J - 1, 0, -1):
         cash *= disc                      # now valued at t_j
         Sj = S[:, j]
         ex_val = spec.payoff(Sj)
         itm = ex_val > 0.0
         exercise = np.zeros(N, dtype=bool)
-        if itm.sum() > M_tau + 1:
+        if j in itm_fits:
+            fit = itm_fits[j]
+        elif itm.sum() > M_tau + 1:
             fit = _cheb_fit(Sj[itm], cash[itm], M_tau)
-            cont = _cheb_eval(Sj[itm], fit)
-            exercise[itm] = ex_val[itm] >= cont
+        else:
+            fit = None
+        used_fits[j] = fit
+        if fit is not None and itm.any():
+            exercise[itm] = ex_val[itm] >= _cheb_eval(Sj[itm], fit)
         if j == 1:
-            fit_all = _cheb_fit(Sj, cash, M_tau)
-            V1 = np.where(exercise, ex_val, _cheb_eval(Sj, fit_all))
+            fit_all = t1_fit_all if t1_fit_all is not None else _cheb_fit(Sj, cash, M_tau)
+            cont = _cheb_eval(Sj, fit_all)
+            if vf_rule == "itm":
+                V1 = np.where(exercise, ex_val, cont)
+            elif vf_rule == "max":
+                V1 = np.maximum(ex_val, cont)
+            else:
+                raise ValueError(f"unknown vf_rule {vf_rule!r}")
             Y_vf = disc * V1
         cash = np.where(exercise, ex_val, cash)
     if J == 1:  # European-like degenerate case
-        cash_t1 = spec.payoff(S[:, 1])
-        return LSMResult(disc * cash_t1, disc * cash_t1)
-    return LSMResult(disc * cash, Y_vf)
+        cash_t1 = disc * spec.payoff(S[:, 1])
+        return LSMResult(cash_t1, cash_t1, {}, None)
+    return LSMResult(disc * cash, Y_vf, used_fits, fit_all)
 
 
 def greeks_regression(X: np.ndarray, Y: np.ndarray, x0: float, M0: int = 9):

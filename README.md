@@ -93,15 +93,34 @@ orders 3–9.
   Gijbels form with w0 = indicator of the ISD support. Local fit of order q
   (the lowest that identifies β_q). When M0 − ν is even, the next-order bias
   term is used.
-- **2-step:** paths are rescaled (same shocks, new initial values within α\*),
-  and LSM is re-run on the rescaled paths.
+- **2-step (default `second_step="refit_t1"`):** X' = S0 + (α\*/α0)(X − S0)
+  and each path is scaled by X'/X (same shocks). The pilot's stored
+  in-the-money exercise rules are re-applied at t_{J−1}..t_2 without
+  re-estimation. The t_1 regression is refitted on all rescaled paths, and
+  Y' = e^{−r·dt} max(Z, Ĉ_new). The Tables 4–9 results above were produced
+  with the earlier `rerun` mode, which re-estimates the whole LSM on the
+  rescaled paths; the diagnostic below shows the two give the same results.
 - **Regression bases:** Chebyshev polynomials for the LSM regressions; scaled
   monomials centred at S0 for the t = 0 regression, so the coefficients are
   the price and its derivatives.
 
+### Fixed-α\* diagnostic (`results/fixed_alpha.md`)
+`python experiments/run.py fixed_alpha` bypasses the selector: α\* ∈ {4, 5, 6},
+α0 ∈ {5, 10, 25}, K ∈ {36, 40, 44}, 100 runs, three second-step modes on the
+same paths.
+- `refit_t1` and `rerun`: no estimate significantly different from the
+  benchmark (0 of 81 each), and the two agree to within ~0.002. With α\* = 6
+  the standard deviations match the paper's Table 4 at α = 25 (e.g. ATM
+  Gamma sd 0.0069 vs 0.0065).
+- `reuse_t1` (pilot t_1 curve reused): clearly biased when α0 = 25, e.g. ATM
+  Gamma +0.0076, ITM price +0.043.
+
+So the second step is not the cause of the remaining differences: with a
+sensible α\* the method reproduces the paper, and the gap comes from the α\*
+selector.
+
 ### Possible next steps
-1. Run the 2-step method with fixed α\* ∈ {2, …, 8} to find which α\*
-   reproduces the paper's tables.
+1. Make the α\* selector land near 5–6 regardless of the initial α.
 2. Try other readings of the value-function step.
 3. Use a more robust curvature estimate for α\*, e.g. a low-order pilot or a
    large pilot simulation (our own extension, not the paper's).

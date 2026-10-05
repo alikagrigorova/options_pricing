@@ -9,13 +9,16 @@ import numpy as np
 import pandas as pd
 
 from .core import PutSpec
-from .methods import AlgoConfig, run_once
-
+from .methods import AlgoConfig, run_fixed_alpha, run_once
 
 
 def _job(args):
-    spec, cfg, seed, M0_list, nu_list, tags = args
-    rows = run_once(spec, cfg, seed, M0_list=M0_list, nu_list=nu_list)
+    spec, cfg, seed, extra, tags = args
+    if "alpha_stars" in extra:
+        rows = run_fixed_alpha(spec, cfg, seed, extra["alpha_stars"], extra["modes"])
+    else:
+        rows = run_once(spec, cfg, seed, M0_list=extra.get("M0_list"),
+                        nu_list=extra.get("nu_list"))
     for r in rows:
         r.update(tags)
     return rows
@@ -26,7 +29,8 @@ def run_configs(configs, reps: int, base_seed: int = 20191214,
     """Run ``reps`` replications of each configuration.
 
     ``configs`` is a list of dicts with keys ``spec`` (PutSpec), ``cfg``
-    (AlgoConfig), optional ``M0_list``/``nu_list`` and ``tags`` (dict of
+    (AlgoConfig), optional ``M0_list``/``nu_list`` (or ``alpha_stars`` and
+    ``modes`` for the fixed-alpha* diagnostic) and ``tags`` (dict of
     columns to attach to each output row, which also identifies the config).
     Seeds are derived from (base_seed, tags, rep) so results are reproducible
     and independent across configurations and replications.
@@ -38,8 +42,9 @@ def run_configs(configs, reps: int, base_seed: int = 20191214,
         for rep in range(reps):
             seed = np.random.SeedSequence([base_seed, key, rep])
             t = dict(tags, rep=rep)
-            jobs.append((c["spec"], c["cfg"], seed, c.get("M0_list"),
-                         c.get("nu_list"), t))
+            extra = {k: c[k] for k in ("M0_list", "nu_list", "alpha_stars", "modes")
+                     if k in c}
+            jobs.append((c["spec"], c["cfg"], seed, extra, t))
     workers = workers or os.cpu_count()
     rows = []
     with ProcessPoolExecutor(max_workers=workers) as ex:

@@ -245,13 +245,60 @@ def table9(reps, N):
                      tab, extra)])
 
 
+def fixed_alpha(reps, N):
+    """Diagnostic: 2-step with alpha* fixed, for each second-step mode."""
+    from simgreeks.methods import SECOND_STEP_MODES
+    configs = [dict(spec=PutSpec(K=K), cfg=AlgoConfig(N=N, alpha=a0),
+                    alpha_stars=[4, 5, 6], modes=list(SECOND_STEP_MODES),
+                    tags=dict(K=K, alpha0=a0))
+               for a0 in (5, 10, 25) for K in STRIKES]
+    df = run_configs(configs, reps)
+    _save_raw(df, "fixed_alpha")
+    report_fixed_alpha(df)
+
+
+def report_fixed_alpha(df):
+    bm = PAPER[(PAPER.table == 4) & (PAPER.alpha.astype(float) == 25)].set_index("K")
+    rows = []
+    for (mode, K, a0, a), g in df.groupby(["mode", "K", "alpha0", "alpha_star"]):
+        r = dict(mode=mode, K=K, alpha0=a0, alpha_star=a)
+        for q in ("price", "delta", "gamma"):
+            b = float(bm.loc[K, f"{q}_bm"])
+            mu, sd, n = g[q].mean(), g[q].std(), g[q].count()
+            r[f"{q}_bias"] = mu - b
+            r[f"{q}_sd"] = sd
+            r[f"{q}_sig"] = abs(mu - b) / (sd / np.sqrt(n)) > 2.576
+        rows.append(r)
+    out = pd.DataFrame(rows)
+    out.to_csv(RESULTS / "fixed_alpha_summary.csv", index=False)
+    lines = ["# Fixed-alpha* diagnostic for the 2-step second step\n",
+             "Bias = mean − BM, sd = std across replications; † = significant at 1%. "
+             "Modes: refit_t1 = stored pilot exercise rules at t2..t_{J-1}, t1 "
+             "regression refitted on the rescaled paths (default); reuse_t1 = pilot "
+             "t1 curve reused; rerun = full LSM re-estimated on the rescaled paths.\n",
+             "Paper Table 4 (estimated alpha*, initial alpha = 25) for reference: "
+             + "; ".join(f"K={K}: Gamma {bm.loc[K, 'gamma_paper']} "
+                         f"(sd {bm.loc[K, 'gamma_paper_sd']}), BM {bm.loc[K, 'gamma_bm']}"
+                         for K in STRIKES) + "\n"]
+    head = ["mode", "K", "alpha0", "alpha*"] + [f"{q} {s}" for q in ("price", "delta", "gamma")
+                                               for s in ("bias", "sd")]
+    lines += ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    for _, r in out.iterrows():
+        cells = [r["mode"], f"{r['K']}", f"{r['alpha0']:g}", f"{r['alpha_star']:g}"]
+        for q in ("price", "delta", "gamma"):
+            cells += [f"{r[q + '_bias']:+.4f}{'†' if r[q + '_sig'] else ''}", f"{r[q + '_sd']:.4f}"]
+        lines.append("| " + " | ".join(cells) + " |")
+    (RESULTS / "fixed_alpha.md").write_text("\n".join(lines) + "\n")
+
+
 EXPERIMENTS = ["section3", "fig2", "table5", "table6", "table7", "table8", "table9"]
+DIAGNOSTICS = ["fixed_alpha"]
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("experiments", nargs="+", choices=EXPERIMENTS + ["all", "report"])
+    ap.add_argument("experiments", nargs="+", choices=EXPERIMENTS + DIAGNOSTICS + ["all", "report"])
     ap.add_argument("--reps", type=int, default=100, help="independent replications")
     ap.add_argument("--N", type=int, default=100_000, help="simulated paths")
     args = ap.parse_args()
