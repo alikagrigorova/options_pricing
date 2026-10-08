@@ -9,6 +9,7 @@ American Options".
   Section 3.2
 * The t = 0 cross-sectional polynomial regression, eq. (22), giving price,
   Delta and Gamma
+* Theta from the Black-Scholes PDE identity (not in the paper)
 """
 from __future__ import annotations
 
@@ -206,6 +207,24 @@ def greeks_regression(X: np.ndarray, Y: np.ndarray, x0: float, M0: int = 9):
     delta = c[1] / h
     gamma = 2.0 * c[2] / h ** 2 if M0 >= 2 else np.nan
     return price, delta, gamma
+
+
+def theta_pde(spec: PutSpec, price: float, delta: float, gamma: float):
+    """Theta = dV/dt at t = 0 (calendar time, per year) from the Black-Scholes PDE.
+
+    Continuation region: Theta = r V - (r - d) S0 Delta - 1/2 sigma^2 S0^2 Gamma.
+    Exercise region, where immediate exercise is optimal and V = K - S: Theta = 0.
+    S0 is taken to be in the exercise region when price <= K - S0. The estimated
+    price is the continuation value (LSM has no exercise at t_0), so this is the
+    test "exercise now >= continue".
+
+    Returns (theta, in_exercise_region).
+    """
+    if price <= spec.K - spec.S0:
+        return 0.0, True
+    theta = (spec.r * price - (spec.r - spec.d) * spec.S0 * delta
+             - 0.5 * spec.sigma ** 2 * spec.S0 ** 2 * gamma)
+    return float(theta), False
 
 
 def poly_derivative_coef(i: int) -> float:

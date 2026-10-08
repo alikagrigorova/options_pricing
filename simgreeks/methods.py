@@ -14,10 +14,18 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .core import PutSpec, greeks_regression, isd_sample, lsm, simulate_growth
-from .selector import select_alpha
+from .core import PutSpec, greeks_regression, isd_sample, lsm, simulate_growth, theta_pde
+from .selector import ALPHA_CAP, select_alpha
 
 METHODS = ("NAIVE", "NAIVE-VF", "TRUNC-VF", "2STEP-VF")
+
+# How alpha*, the ISD size used by TRUNC-VF and 2STEP-VF, is set:
+#   selector  : Appendix A.2 selector (simgreeks.selector), as printed  (default)
+#   fixed     : AlgoConfig.alpha_star_fixed
+#   heuristic : alpha_star_c * S0 * sigma * sqrt(T), capped at ALPHA_CAP * S0.
+#               TEMPORARY PLACEHOLDER, NOT PART OF THE PAPER: it stands in for
+#               the selector until the selector is fixed.
+ALPHA_STAR_RULES = ("selector", "fixed", "heuristic")
 
 # How the 2-step method treats the rescaled paths:
 #   refit_t1 : re-apply the pilot's stored in-the-money rules at t_{J-1}..t_2,
@@ -56,18 +64,39 @@ class AlgoConfig:
     isd_deterministic: bool = True
     nu_opt: int = 2                # derivative alpha* is optimised for
     second_step: str = "refit_t1"  # see SECOND_STEP_MODES
-    alpha_star_fixed: float | None = None  # bypass the selector (diagnostics)
+    alpha_star_rule: str = "selector"      # see ALPHA_STAR_RULES
+    alpha_star_fixed: float | None = None  # alpha* for alpha_star_rule="fixed"
+    alpha_star_c: float = 0.6              # c for alpha_star_rule="heuristic" (placeholder)
     selector_reading: str = "literal"      # "literal" (paper) or "fg" (Fan & Gijbels)
     methods: tuple = field(default=METHODS)
+
+    def __post_init__(self):
+        if self.alpha_star_rule not in ALPHA_STAR_RULES:
+            raise ValueError(f"unknown alpha_star_rule {self.alpha_star_rule!r}")
+        if (self.alpha_star_rule == "fixed") != (self.alpha_star_fixed is not None):
+            raise ValueError("alpha_star_fixed must be set if and only if "
+                             "alpha_star_rule='fixed'")
+
+
+def alpha_star(spec: PutSpec, cfg: AlgoConfig, X, Y_vf, M0: int, nu: int) -> float:
+    """alpha* according to cfg.alpha_star_rule (see ALPHA_STAR_RULES)."""
+    if cfg.alpha_star_rule == "fixed":
+        return float(cfg.alpha_star_fixed)
+    if cfg.alpha_star_rule == "heuristic":
+        # Placeholder, not from the paper (see ALPHA_STAR_RULES).
+        a = cfg.alpha_star_c * spec.S0 * spec.sigma * np.sqrt(spec.T)
+        return float(min(a, ALPHA_CAP * spec.S0))
+    return select_alpha(X, Y_vf, spec.S0, cfg.alpha, cfg.isd_kernel, M0, nu,
+                        cfg.selector_reading)["alpha_star"]
 
 
 def run_once(spec: PutSpec, cfg: AlgoConfig, seed, M0_list=None, nu_list=None):
     """One independent replication.
 
     Returns a list of dict rows with keys method, M0, nu, price, delta, gamma,
-    alpha_star. ``M0_list`` / ``nu_list`` allow evaluating several t = 0
-    polynomial orders / bandwidth targets on the *same* simulated paths (used
-    for Tables 7 and 9).
+    theta, ex_region (see core.theta_pde), alpha_star. ``M0_list`` /
+    ``nu_list`` allow evaluating several t = 0 polynomial orders / bandwidth
+    targets on the *same* simulated paths (used for Tables 7 and 9).
     """
     rng = np.random.default_rng(seed)
     x0 = spec.S0
@@ -81,36 +110,33 @@ def run_once(spec: PutSpec, cfg: AlgoConfig, seed, M0_list=None, nu_list=None):
     rows = []
     for M0 in M0_list:
         if "NAIVE" in cfg.methods:
-            rows.append(_row("NAIVE", M0, None, greeks_regression(X, res.Y_naive, x0, M0), np.nan))
+            rows.append(_row(spec, "NAIVE", M0, None, greeks_regression(X, res.Y_naive, x0, M0), np.nan))
         if "NAIVE-VF" in cfg.methods:
-            rows.append(_row("NAIVE-VF", M0, None, greeks_regression(X, res.Y_vf, x0, M0), np.nan))
+            rows.append(_row(spec, "NAIVE-VF", M0, None, greeks_regression(X, res.Y_vf, x0, M0), np.nan))
         for nu in nu_list:
             need_bw = ("TRUNC-VF" in cfg.methods) or ("2STEP-VF" in cfg.methods)
             if not need_bw:
                 continue
-            if cfg.alpha_star_fixed is not None:
-                a_star = cfg.alpha_star_fixed
-            else:
-                a_star = select_alpha(X, res.Y_vf, x0, cfg.alpha, cfg.isd_kernel,
-                                      M0, nu, cfg.selector_reading)["alpha_star"]
+            a_star = alpha_star(spec, cfg, X, res.Y_vf, M0, nu)
             if "TRUNC-VF" in cfg.methods:
                 m = np.abs(X - x0) <= a_star
                 if m.sum() < 5 * (M0 + 1):
                     est = (np.nan, np.nan, np.nan)
                 else:
                     est = greeks_regression(X[m], res.Y_vf[m], x0, M0)
-                rows.append(_row("TRUNC-VF", M0, nu, est, a_star))
+                rows.append(_row(spec, "TRUNC-VF", M0, nu, est, a_star))
             if "2STEP-VF" in cfg.methods:
                 X2, Y2 = second_step(spec, cfg, X, G, res, cfg.alpha, a_star,
                                      cfg.second_step)
                 est = greeks_regression(X2, Y2, x0, M0)
-                rows.append(_row("2STEP-VF", M0, nu, est, a_star))
+                rows.append(_row(spec, "2STEP-VF", M0, nu, est, a_star))
     return rows
 
 
-def _row(method, M0, nu, est, a_star):
+def _row(spec, method, M0, nu, est, a_star):
+    theta, ex_region = theta_pde(spec, *est)
     return dict(method=method, M0=M0, nu=nu, price=est[0], delta=est[1],
-                gamma=est[2], alpha_star=a_star)
+                gamma=est[2], theta=theta, ex_region=ex_region, alpha_star=a_star)
 
 
 def run_fixed_alpha(spec: PutSpec, cfg: AlgoConfig, seed, alpha_stars, modes):
@@ -126,7 +152,7 @@ def run_fixed_alpha(spec: PutSpec, cfg: AlgoConfig, seed, alpha_stars, modes):
         for mode in modes:
             X2, Y2 = second_step(spec, cfg, X, G, pilot, cfg.alpha, a_star, mode)
             est = greeks_regression(X2, Y2, x0, cfg.M0)
-            r = _row("2STEP-VF", cfg.M0, None, est, a_star)
+            r = _row(spec, "2STEP-VF", cfg.M0, None, est, a_star)
             r["mode"] = mode
             rows.append(r)
     return rows

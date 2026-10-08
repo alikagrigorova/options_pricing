@@ -49,6 +49,7 @@ from math import comb, log
 import numpy as np
 
 C_W0 = 0.9
+ALPHA_CAP = 0.75                 # alpha* <= ALPHA_CAP * x0 keeps rescaled prices positive
 READINGS = ("literal", "fg")
 
 
@@ -140,7 +141,7 @@ def select_alpha(X, Y, x0: float, alpha0: float, isd_kernel: str = "epanechnikov
     # Step 3: plug-in (A.1)
     den = 2 * (q - nu) * k["b"] ** 2 * beta_q ** 2 * N * f0
     raw = ((2 * nu + 1) * a * s2 / den) ** (1 / (2 * q + 1)) if den > 0 else np.inf
-    cap = 0.75 * x0
+    cap = ALPHA_CAP * x0
     return dict(alpha_star=float(min(raw, cap)), alpha_raw=float(raw), capped=bool(raw > cap),
                 h_rot=float(h_rot), n_local=int(len(Xl)), beta_q=beta_q, sigma2_local=s2,
                 sigma2_global=s2g, f_x0=f0, q=q, a=a, b=k["b"], b_rot=k["b_rot"],

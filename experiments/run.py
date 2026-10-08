@@ -5,6 +5,7 @@ proposed method (Sections 3 and 4.1-4.3).
     python experiments/run.py fig2                # Figure 2
     python experiments/run.py table5 table6 table7 table8 table9
     python experiments/run.py all --reps 100
+    python experiments/run.py table5_heuristic    # placeholder alpha* (not the paper)
 
 Per-replication estimates are written to results/raw/<exp>.csv, summary
 tables (with the paper's numbers side by side) to results/<exp>.md and figures
@@ -150,21 +151,36 @@ TWO_STEP = ("2STEP-VF",)
 
 
 def table5(reps, N):
+    _table5(reps, N, "table5", "Table 5: 2-step method for a large sample of options")
+
+
+def table5_heuristic(reps, N):
+    """Diagnostic: Table 5 with alpha* = 0.6 S0 sigma sqrt(T), the TEMPORARY
+    placeholder for the selector (not part of the paper)."""
+    _table5(reps, N, "table5_heuristic",
+            "Table 5 with the placeholder alpha* = 0.6 S0 sigma sqrt(T) (not the paper's selector)",
+            alpha_star_rule="heuristic", alpha_star_c=0.6)
+
+
+def _table5(reps, N, name, title, **cfg_kw):
     configs = []
     for T in (0.5, 1.0, 2.0):
         for sig in (0.10, 0.20, 0.40):
             for K in STRIKES:
                 configs.append(dict(spec=PutSpec(K=K, sigma=sig, T=T),
-                                    cfg=AlgoConfig(N=N, alpha=10, methods=TWO_STEP),
+                                    cfg=AlgoConfig(N=N, alpha=10, methods=TWO_STEP, **cfg_kw),
                                     tags=dict(K=K, sigma=int(round(sig * 100)), T=T)))
     df = run_configs(configs, reps)
-    _save_raw(df, "table5")
+    _save_raw(df, name)
     paper = PAPER[PAPER.table == 5].copy()
     paper["sigma"] = paper.sigma.astype(int)
     paper["T"] = paper["T"].astype(float)
     tab = summary_table(df, ["T", "sigma", "K"], paper, ["T", "sigma", "K"])
-    write_markdown(RESULTS / "table5.md", "Table 5: 2-step method for a large sample of options",
-                   [("alpha = 10, N = 100,000, M_tau = M0 = 9", tab, "")])
+    a = df.groupby(["T", "sigma"]).alpha_star.mean().round(2)
+    extra = "\n\nMean alpha*: " + ", ".join(
+        f"(T={i[0]:g}, sigma={i[1]}%) {v}" for i, v in a.items())
+    write_markdown(RESULTS / f"{name}.md", title,
+                   [(f"alpha = 10, N = {N:,}, M_tau = M0 = 9, {reps} replications", tab, extra)])
 
 
 def table6(reps, N):
@@ -292,7 +308,7 @@ def report_fixed_alpha(df):
 
 
 EXPERIMENTS = ["section3", "fig2", "table5", "table6", "table7", "table8", "table9"]
-DIAGNOSTICS = ["fixed_alpha"]
+DIAGNOSTICS = ["fixed_alpha", "table5_heuristic"]
 
 
 def main():

@@ -14,7 +14,9 @@ from .methods import AlgoConfig, run_fixed_alpha, run_once
 
 def _job(args):
     spec, cfg, seed, extra, tags = args
-    if "alpha_stars" in extra:
+    if "fn" in extra:               # e.g. simgreeks.multi.label -> one dict row
+        rows = [extra["fn"](spec, cfg, seed)]
+    elif "alpha_stars" in extra:
         rows = run_fixed_alpha(spec, cfg, seed, extra["alpha_stars"], extra["modes"])
     else:
         rows = run_once(spec, cfg, seed, M0_list=extra.get("M0_list"),
@@ -30,7 +32,8 @@ def run_configs(configs, reps: int, base_seed: int = 20191214,
 
     ``configs`` is a list of dicts with keys ``spec`` (PutSpec), ``cfg``
     (AlgoConfig), optional ``M0_list``/``nu_list`` (or ``alpha_stars`` and
-    ``modes`` for the fixed-alpha* diagnostic) and ``tags`` (dict of
+    ``modes`` for the fixed-alpha* diagnostic, or ``fn``, a picklable
+    fn(spec, cfg, seed) -> dict used instead of run_once) and ``tags`` (dict of
     columns to attach to each output row, which also identifies the config).
     Seeds are derived from (base_seed, tags, rep) so results are reproducible
     and independent across configurations and replications.
@@ -42,7 +45,7 @@ def run_configs(configs, reps: int, base_seed: int = 20191214,
         for rep in range(reps):
             seed = np.random.SeedSequence([base_seed, key, rep])
             t = dict(tags, rep=rep)
-            extra = {k: c[k] for k in ("M0_list", "nu_list", "alpha_stars", "modes")
+            extra = {k: c[k] for k in ("M0_list", "nu_list", "alpha_stars", "modes", "fn")
                      if k in c}
             jobs.append((c["spec"], c["cfg"], seed, extra, t))
     workers = workers or os.cpu_count()
