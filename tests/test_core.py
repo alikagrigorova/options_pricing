@@ -70,6 +70,9 @@ def test_alpha_star_rules():
     from simgreeks.methods import AlgoConfig, alpha_star
     spec = PutSpec(S0=40, sigma=0.2, T=1.0)
     assert AlgoConfig().alpha_star_rule == "selector"
+    assert AlgoConfig().selector_order == "nu+1"
+    with pytest.raises(ValueError):
+        AlgoConfig(selector_order="M")
     cfg = AlgoConfig(alpha_star_rule="heuristic")
     assert np.isclose(alpha_star(spec, cfg, None, None, 9, 2), 0.6 * 40 * 0.2)
     capped = alpha_star(PutSpec(S0=40, sigma=1.0, T=4.0), cfg, None, None, 9, 2)

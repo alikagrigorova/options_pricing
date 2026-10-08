@@ -28,9 +28,12 @@ METHODS = ("NAIVE", "NAIVE-VF", "TRUNC-VF", "2STEP-VF")
 ALPHA_STAR_RULES = ("selector", "fixed", "heuristic")
 
 # Order M of the local polynomial in the selector's formulas (A.1)-(A.3):
-#   M0   : the order of the t = 0 regression (M0 = 9), so (A.1) needs beta_{M0+1}
 #   nu+1 : the order Fan & Gijbels recommend for derivative nu (p - nu = 1), so
-#          (A.1) needs beta_{nu+2}, e.g. beta_4 for the Gamma
+#          (A.1) needs beta_{nu+2}, e.g. beta_4 for the Gamma (default). Table 5:
+#          1 of 81 estimates flagged, as in the paper.
+#   M0   : the order of the t = 0 regression (M0 = 9), so (A.1) needs beta_{M0+1},
+#          which is noise with 100,000 paths: alpha* ends up proportional to
+#          the initial alpha. Table 5: 15 of 81 flagged.
 SELECTOR_ORDERS = ("M0", "nu+1")
 
 # How the 2-step method treats the rescaled paths:
@@ -74,7 +77,7 @@ class AlgoConfig:
     alpha_star_fixed: float | None = None  # alpha* for alpha_star_rule="fixed"
     alpha_star_c: float = 0.6              # c for alpha_star_rule="heuristic" (placeholder)
     selector_reading: str = "literal"      # "literal" (paper) or "fg" (Fan & Gijbels)
-    selector_order: str = "M0"             # order M in (A.1)-(A.3): "M0" or "nu+1" (see SELECTOR_ORDERS)
+    selector_order: str = "nu+1"           # order M in (A.1)-(A.3): "nu+1" or "M0" (see SELECTOR_ORDERS)
     methods: tuple = field(default=METHODS)
 
     def __post_init__(self):
