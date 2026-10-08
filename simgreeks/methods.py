@@ -14,9 +14,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .bandwidth import optimal_alpha
-from .core import (PutSpec, greeks_regression, isd_density_at_center,
-                   isd_sample, lsm, simulate_growth)
+from .core import PutSpec, greeks_regression, isd_sample, lsm, simulate_growth
+from .selector import select_alpha
 
 METHODS = ("NAIVE", "NAIVE-VF", "TRUNC-VF", "2STEP-VF")
 
@@ -58,6 +57,7 @@ class AlgoConfig:
     nu_opt: int = 2                # derivative alpha* is optimised for
     second_step: str = "refit_t1"  # see SECOND_STEP_MODES
     alpha_star_fixed: float | None = None  # bypass the selector (diagnostics)
+    selector_reading: str = "literal"      # "literal" (paper) or "fg" (Fan & Gijbels)
     methods: tuple = field(default=METHODS)
 
 
@@ -77,7 +77,6 @@ def run_once(spec: PutSpec, cfg: AlgoConfig, seed, M0_list=None, nu_list=None):
     G = simulate_growth(spec, cfg.N, rng)
     X = isd_sample(cfg.N, x0, cfg.alpha, cfg.isd_kernel, cfg.isd_deterministic, rng)
     res = lsm(spec, X[:, None] * G, cfg.M_tau)
-    f0 = isd_density_at_center(cfg.alpha, cfg.isd_kernel)
 
     rows = []
     for M0 in M0_list:
@@ -92,8 +91,8 @@ def run_once(spec: PutSpec, cfg: AlgoConfig, seed, M0_list=None, nu_list=None):
             if cfg.alpha_star_fixed is not None:
                 a_star = cfg.alpha_star_fixed
             else:
-                a_star = optimal_alpha(X, res.Y_vf, x0, cfg.alpha, f0, M0=M0, nu=nu,
-                                       alpha_max=0.75 * x0)
+                a_star = select_alpha(X, res.Y_vf, x0, cfg.alpha, cfg.isd_kernel,
+                                      M0, nu, cfg.selector_reading)["alpha_star"]
             if "TRUNC-VF" in cfg.methods:
                 m = np.abs(X - x0) <= a_star
                 if m.sum() < 5 * (M0 + 1):

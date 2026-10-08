@@ -7,30 +7,38 @@ Monte Carlo (LSM) with **initial state dispersion (ISD)**, a **value-function
 step at t = 1**, and the proposed **2-step method** that rescales the ISD to
 an estimated optimal size α\*.
 
+The code implements the paper's method **as printed**. Where the paper leaves
+a detail open, the choice is listed under [Choices](#choices-the-paper-leaves-open).
+No rule that is not in the paper is used to produce the main results.
+
 Not replicated, on purpose: the binomial benchmark values (and Figure 1, which
 is binomial-based) and the competing methods of Table 10 (PDM, LRM, MLSM).
-Benchmark values are copied from the paper (`data/paper_tables.csv`) and
-used only to flag significant differences. Table 10's 2-step row uses the
-same settings as Table 5's σ = 20 %, T = 1 rows.
+Benchmark values are copied from the paper (`data/paper_tables.csv`) and used
+only to flag significant differences. Table 10's 2-step row uses the same
+settings as Table 5's σ = 20 %, T = 1 rows.
 
 ## Layout
 
 | Path | Content |
 |---|---|
 | `simgreeks/core.py` | ISD (eq. 23, 25), GBM paths, LSM with naive and value-function payoffs, t = 0 regression (eq. 22) |
-| `simgreeks/bandwidth.py` | Optimal α\* selector (Appendix A.2: ROT pilot + local plug-in of eq. A.1) |
-| `simgreeks/methods.py` | One replication of NAIVE, NAIVE-VF, TRUNC-VF and 2STEP-VF |
+| `simgreeks/selector.py` | Optimal α\* selector, Appendix A.2: ROT pilot (A.2)–(A.3), local fit, plug-in (A.1) |
+| `simgreeks/methods.py` | One replication of NAIVE, NAIVE-VF, TRUNC-VF and 2STEP-VF; the 2-step second step |
 | `simgreeks/runner.py`, `report.py` | Parallel replications; paper-style tables with † flags |
-| `experiments/run.py` | All experiments |
+| `experiments/run.py` | All experiments of Sections 3 and 4.1–4.3, plus the fixed-α\* diagnostic |
+| `experiments/diagnostics/` | Diagnostics of the α\* selector (see below) |
 | `data/paper_tables.csv` | Tables 1–9 of the paper (BM, estimates, std devs, † flags) |
-| `results/*.md`, `results/figures/`, `results/raw/` | Output tables, figures, and per-replication estimates |
+| `results/` | Output tables (`*.md`), figures, per-replication estimates (`raw/`), diagnostics |
 
 ## Running
 
 ```bash
 pip install -r requirements.txt
-python experiments/run.py all --reps 100          # ≈ 75 min on 4 cores
-python experiments/run.py section3 --reps 10      # quick look at Tables 1-4, Fig. 3
+python experiments/run.py all --reps 100            # Figs 2-3, Tables 1-9 (≈ 80 min on 4 cores)
+python experiments/run.py fixed_alpha --reps 100    # fixed-alpha* diagnostic (≈ 15 min)
+python experiments/diagnostics/table9_selector_trace.py
+python experiments/diagnostics/beta_scaling.py
+python experiments/diagnostics/synthetic_selector_check.py
 python -m pytest tests
 ```
 
@@ -46,82 +54,83 @@ year, N = 100,000 paths, Mτ = M0 = 9, 100 independent replications. A † marks
 | Table 1: naive | `section3_tables1-4.md` | 9 / 10 of 27 | Reproduced (α = 25 biases match to ~0.002) |
 | Table 2: value function | same | 10 / 13 | Close at α = 5 and 25; noisier Greeks at α = 0.5 |
 | Table 3: truncation | same | 10 / 3 | Bias at α = 25 only partly removed |
-| Table 4: 2-step | same | 7 / 2 | Matches at α = 5; residual bias at α = 25; Greeks very noisy at α = 0.5 |
-| Fig. 3: all methods across α | `figures/figure3.png` | – | Main message reproduced; ITM Gamma biased ≈ +0.006 for α ≥ 20 |
-| Table 5: 27 options | `table5.md` | 15 / 1 of 81 | σ = 20 %: 0 flags, matches; σ = 40 %: 2 price flags; σ = 10 %: 13 flags |
-| Table 6: r and d | `table6.md` | 6 / 0 of 27 | Small price biases (r = d = 0 is borderline in the paper too) |
-| Table 7: N and M0 | `table7.md` | 6 / 15 of 81 | Same pattern: M0 = 5 and small N are worst |
-| Table 8: Mτ | `table8.md` | 6 / 0 of 27 | Little effect of Mτ, as in the paper; some small biases |
-| Table 9: ISD kernel, α\* target | `table9.md` | 0 / 0 of 45 | Estimates fine, but the paper's effects of kernel and target are absent |
+| Table 4: 2-step | same | 4 / 2 | Matches at α = 5; residual bias at α = 25; very noisy Greeks at α = 0.5 |
+| Fig. 3: all methods across α | `figures/figure3.png` | – | Main message reproduced: only 2-step stays near the benchmark as α grows |
+| Table 5: 27 options | `table5.md` | 15 / 1 of 81 | σ = 20 % matches; misses concentrated at σ = 10 % |
+| Table 6: r and d | `table6.md` | 3 / 0 of 27 | Small price biases |
+| Table 7: N and M0 | `table7.md` | 4 / 15 of 81 | Same pattern: M0 = 5 and small N are worst |
+| Table 8: Mτ | `table8.md` | 5 / 0 of 27 | Little effect of Mτ, as in the paper |
+| Table 9: ISD kernel, α\* target | `table9.md` | 0 / 0 of 45 | Estimates fine, but the paper's effects of kernel and target are much weaker |
 
-## Main deviation: the optimal α\* selector
+In total 60 of 369 estimates are flagged (paper: 44). The NAIVE and NAIVE-VF
+tables, which do not use α\*, match the paper. The differences in the other
+tables come from the α\* selector.
 
-Everything except the α\* selector behaves as in the paper. The naive method
-at α = 25 reproduces the paper's biases almost exactly, and the 2-step method
-matches wherever the selected α\* is moderate (initial α = 5; σ = 20 % in
-Table 5).
+## The α\* selector: why the results differ
 
-The selector is implemented as described in Appendix A.2. It needs the
-(M0 + 1)-th derivative of the price function, i.e. the 10th for M0 = 9. With
-100,000 paths this cannot be estimated from the data. The estimate is noise,
-and noise makes α\* ≈ 0.5–0.6 × initial α:
+The selector produces an α\* proportional to the initial ISD size α0, while the
+paper's standard deviations imply an α\* near 4–6 for any α0 ≥ 5:
 
-| initial α | 0.5 | 5 | 10 | 25 |
-|---|---|---|---|---|
-| our mean α\* | 0.3 | 3.0 | 6.0 | 12.4 |
+| initial α0 | 0.5 | 1 | 2.5 | 5 | 10 | 15 | 25 | 40 |
+|---|---|---|---|---|---|---|---|---|
+| mean α\* (Section 3 runs) | 0.28 | 0.58 | 1.5 | 3.1 | 6.2 | 9.3 | 12.9 | 14.3 |
 
-From the paper's standard deviations, its α\* seems to stay near 4–5 regardless
-of the initial α. The consequences:
-- α\* ≈ 12 crosses the early-exercise boundary: residual bias for ITM options,
-  σ = 10 % options, and α = 25 in Tables 3–4.
-- α\* ≈ 0.3 is too narrow: very noisy Greeks at α = 0.5.
-- α\* barely depends on the targeted derivative or the ISD kernel, so Table 9's
-  effects do not appear.
+A too-wide α\* (≈ 13 at α0 = 25) crosses the early-exercise boundary and biases
+the Greeks. A too-narrow one (≈ 0.3 at α0 = 0.5) makes them very noisy.
 
-Variants tried, all with the same proportional behaviour: local pilot order
-q vs q + 2, β from the global pilot, an uncapped ROT bandwidth, and pilot
-orders 3–9.
+The diagnostics in `results/diagnostics/` and `results/fixed_alpha.md` show why:
 
-### Choices where the paper is not explicit
-- **Value function at t = 1:** paths exercised at t1 take Z(t1). The others
-  take a continuation value fitted on *all* paths, so out-of-the-money paths
-  also get one. The exercise decision itself uses the standard in-the-money
-  regression. At the same α our value-function Gammas are ~35 % noisier than
-  the paper's, so their implementation may differ here.
-- **Bias constant in (A.1):** we use Fan & Gijbels' b = [S⁻¹c]_ν, not "the
-  diagonal of Q" as written in the paper. Rule-of-thumb (A.2): standard Fan &
-  Gijbels form with w0 = indicator of the ISD support. Local fit of order q
-  (the lowest that identifies β_q). When M0 − ν is even, the next-order bias
-  term is used.
-- **2-step (default `second_step="refit_t1"`):** X' = S0 + (α\*/α0)(X − S0)
-  and each path is scaled by X'/X (same shocks). The pilot's stored
-  in-the-money exercise rules are re-applied at t_{J−1}..t_2 without
-  re-estimation. The t_1 regression is refitted on all rescaled paths, and
-  Y' = e^{−r·dt} max(Z, Ĉ_new). The Tables 4–9 results above were produced
-  with the earlier `rerun` mode, which re-estimates the whole LSM on the
-  rescaled paths; the diagnostic below shows the two give the same results.
-- **Regression bases:** Chebyshev polynomials for the LSM regressions; scaled
-  monomials centred at S0 for the t = 0 regression, so the coefficients are
-  the price and its derivatives.
+1. **The rest of the method is right** (`fixed_alpha.md`). With α\* fixed at
+   4–6, the 2-step method reproduces the paper's Table 4: no estimate is flagged,
+   and the standard deviations are close to the paper's.
+2. **No implementation bug** (`diagnostics/synthetic`). On a known curve (the
+   Black-Scholes put) without noise, the selector recovers the true β₁₀ to within
+   1–7 %, and with tiny noise α\* matches the oracle α\*.
+3. **The curvature estimate is noise** (`diagnostics/beta_scaling`). On the real
+   value-function data the estimated β₁₀ scales as α0^−9.9 (noise in a window
+   ∝ α0 predicts −10), with a random sign up to α0 ≈ 10. Plugged into (A.1) this
+   forces α\* ∝ α0. The measured slope is 0.997.
+4. **The constants are not the cause** (`diagnostics/table9_trace`). The printed
+   constants and Fan & Gijbels' constants give the same proportional α\*. The
+   printed ones reproduce the *direction* of the paper's Table 9 (a smaller α\*
+   when optimising for the price) but not its size.
 
-### Fixed-α\* diagnostic (`results/fixed_alpha.md`)
-`python experiments/run.py fixed_alpha` bypasses the selector: α\* ∈ {4, 5, 6},
-α0 ∈ {5, 10, 25}, K ∈ {36, 40, 44}, 100 runs, three second-step modes on the
-same paths.
-- `refit_t1` and `rerun`: no estimate significantly different from the
-  benchmark (0 of 81 each), and the two agree to within ~0.002. With α\* = 6
-  the standard deviations match the paper's Table 4 at α = 25 (e.g. ATM
-  Gamma sd 0.0069 vs 0.0065).
-- `reuse_t1` (pilot t_1 curve reused): clearly biased when α0 = 25, e.g. ATM
-  Gamma +0.0076, ITM price +0.043.
+In short, with N = 100,000 the (M0 + 1)-th derivative that (A.1) needs cannot be
+estimated from the data, so the selector as described cannot produce the stable
+α\* the paper's results imply. The paper does not report its α\* values, and the
+implementation details that would explain the difference are not in the paper.
 
-So the second step is not the cause of the remaining differences: with a
-sensible α\* the method reproduces the paper, and the gap comes from the α\*
-selector.
+## Choices the paper leaves open
 
-### Possible next steps
-1. Make the α\* selector land near 5–6 regardless of the initial α.
-2. Try other readings of the value-function step.
-3. Use a more robust curvature estimate for α\*, e.g. a low-order pilot or a
-   large pilot simulation (our own extension, not the paper's).
-4. Check the paper's supplementary document for implementation details.
+**Selector** (`simgreeks/selector.py`). Stated in the paper and implemented as
+written: constants a, b as the (ν+1)-th diagonal elements of Q⁻¹Q\*Q⁻¹ and Q;
+the global pilot of order M + 3 "using all data"; w0 "the indicator function";
+(A.2)–(A.3); "use the ROT to locally fit a polynomial and estimate σ²(x0) and
+β_{M+1}"; (A.1); one pass; OLS as a uniform kernel (eq. 21). Our choices:
+- w0 is the indicator of |x − x0| ≤ 0.9 α0. The interval is not given, and
+  ∫w0/f is infinite if w0 covers the whole Epanechnikov support.
+- The local fit has order M + 1, the lowest order that identifies β_{M+1}. It
+  is unweighted within |X − x0| ≤ h_ROT. The paper recommends "a weighted
+  regression" but gives no weights.
+- h_ROT is not clipped. For ν = 1 the printed (A.3) integral is zero, so h_ROT
+  is infinite and the local fit uses all data.
+- α\* is capped at 0.75 S0, only to keep rescaled prices positive. The cap
+  never binds in the reported runs.
+- `AlgoConfig(selector_reading="fg")` uses Fan & Gijbels' constants instead of
+  the printed ones.
+
+**Value function at t = 1.** Paths exercised at t1 take Z(t1); the others take
+a continuation value fitted on all paths, so out-of-the-money paths also get
+one. The exercise decision uses the standard in-the-money regression.
+
+**2-step second step** (`second_step="refit_t1"`, Section 3.4, step 4).
+X' = S0 + (α\*/α0)(X − S0), and each path is scaled by X'/X with the same
+shocks. The pilot's stored exercise rules are re-applied at t_{J−1}, …, t_2
+without re-estimation, the t1 regression is refitted on the rescaled paths, and
+Y' = e^{−r·dt} max(Z, Ĉ). The fixed-α\* diagnostic also runs two alternatives
+on the same paths. Re-running the whole LSM gives the same results. Reusing the
+pilot's t1 curve is biased when α0 = 25.
+
+**Regression bases.** Chebyshev polynomials for the LSM regressions; scaled
+monomials centred at S0 for the t = 0 regression, so the coefficients are the
+price and its derivatives.
