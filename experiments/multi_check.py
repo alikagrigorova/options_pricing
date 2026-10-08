@@ -11,6 +11,8 @@
     python experiments/multi_check.py european american timing [--reps 100] [--workers N]
 
 Writes results/multi_check_<exp>.md and results/raw/multi_check_<exp>.csv.
+Labels are saved after each option (results/raw/multi_check_<exp>.partial.csv),
+and a rerun resumes from there.
 """
 from __future__ import annotations
 
@@ -69,9 +71,32 @@ def reference(cells, style):
     return pd.DataFrame(rows)
 
 
-def simulate(cells, cfg, reps, seed, workers=None):
-    configs = [dict(spec=spec_of(c), cfg=cfg, fn=label, tags=dict(zip(KEYS, c))) for c in cells]
-    return run_configs(configs, reps, base_seed=seed, workers=workers)
+def rows_of(df, tags):
+    for k, v in tags.items():
+        df = df[np.isclose(df[k], v)]
+    return df
+
+
+def simulate(cells, cfg, reps, seed, partial: Path, workers=None):
+    """Labels for each option. Each option's labels are appended to ``partial``
+    (a CSV) as soon as they are done, and options already there are skipped, so
+    an interrupted check resumes where it stopped. Seeds depend only on the
+    option and the replication, so a resumed check gives the same labels.
+    Delete ``partial`` after changing the configuration."""
+    done = pd.read_csv(partial) if partial.exists() else None
+    if done is not None:
+        print(f"   resuming from {partial.name}", flush=True)
+    for n, c in enumerate(cells):
+        tags = dict(zip(KEYS, c))
+        if done is not None and len(rows_of(done, tags)):
+            if len(rows_of(done, tags)) != reps:
+                raise RuntimeError(f"{partial} has another number of replications; delete it")
+            continue
+        mc = run_configs([dict(spec=spec_of(c), cfg=cfg, fn=label, tags=tags)], reps,
+                         base_seed=seed, workers=workers, progress=False)
+        mc.to_csv(partial, mode="a", header=not partial.exists(), index=False)
+        print(f"   option {n + 1}/{len(cells)} done", flush=True)
+    return pd.read_csv(partial)
 
 
 def summarise(mc, ref):
@@ -116,10 +141,12 @@ def to_markdown(out, title, intro):
 def check(name, cells, cfg, reps, seed, title, intro, workers=None):
     ref = reference(cells, cfg.style)
     t0 = time.time()
-    mc = simulate(cells, cfg, reps, seed, workers)
-    print(f"   {name}: {len(mc)} labels in {time.time() - t0:.0f}s", flush=True)
     (RESULTS / "raw").mkdir(parents=True, exist_ok=True)
+    partial = RESULTS / "raw" / f"multi_check_{name}.partial.csv"
+    mc = simulate(cells, cfg, reps, seed, partial, workers)
+    print(f"   {name}: {len(mc)} labels in {time.time() - t0:.0f}s", flush=True)
     mc.to_csv(RESULTS / "raw" / f"multi_check_{name}.csv", index=False)
+    partial.unlink()
     out = summarise(mc, ref)
     md = to_markdown(out, title, intro)
     (RESULTS / f"multi_check_{name}.md").write_text(md)
