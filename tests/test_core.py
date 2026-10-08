@@ -124,8 +124,8 @@ def test_multi_basis_sizes():
 def test_multi_taylor_regression_recovers_derivatives():
     from simgreeks.multi import MultiConfig, greeks_multi, isd_multi
     spec = PutSpec(S0=40.0, sigma=0.2)
-    cfg = MultiConfig(N=20_000, groups=(("S", "sigma"),))
-    z = isd_multi(spec, cfg, ("S", "sigma"), np.random.default_rng(0))
+    cfg = MultiConfig(N=20_000)
+    z = isd_multi(spec, cfg, {"S": 5.0, "sigma": 0.05}, np.random.default_rng(0))
     x, s = z["S"] - 40.0, z["sigma"] - 0.2
     Y = 2.0 - 0.4 * x + 0.03 * x ** 2 + 15.0 * s + 0.7 * x * s + 4.0 * s ** 2
     g = greeks_multi(spec, cfg, ("S", "sigma"), z, Y)
@@ -149,11 +149,14 @@ def test_multi_control_variate_is_exact_for_european():
     assert np.isclose(out["vera"], bs["vera"], rtol=1e-6, atol=1e-8)
 
 
-def test_multi_american_t0_flag():
+def test_multi_exercise_region_label():
     from simgreeks.multi import MultiConfig, label
-    out = label(PutSpec(K=44, sigma=0.1), MultiConfig(N=20_000, american_t0=True), 1)
+    spec = PutSpec(K=44, sigma=0.1)                # continuation 3.947 < K - S0 = 4
+    out = label(spec, MultiConfig(N=20_000), 1)
     assert out["ex_region"] and out["price"] == 4.0 and out["delta"] == -1.0
-    assert out["gamma"] == out["vega"] == out["theta"] == 0.0
+    assert out["gamma"] == out["vega"] == out["volga"] == out["theta"] == 0.0
+    out = label(spec, MultiConfig(N=20_000, american_t0=False), 1)
+    assert out["ex_region"] and 3.9 < out["price"] < 4.0
 
 
 def test_reference_bumped_greeks_match_closed_form():
@@ -165,66 +168,115 @@ def test_reference_bumped_greeks_match_closed_form():
 
 
 def test_multi_isd_design():
-    from simgreeks.multi import MultiConfig, dispersion_sizes, isd_multi
+    from simgreeks.multi import MultiConfig, isd_multi
     spec = PutSpec(sigma=0.2, r=0.05)
     cfg = MultiConfig(N=50_000)
-    dims = ("S", "sigma", "r")
-    a = dispersion_sizes(spec, cfg, dims)
-    z = isd_multi(spec, cfg, dims, np.random.default_rng(0))
+    a = {"S": 4.8, "sigma": 0.05, "r": 0.02}
+    z = isd_multi(spec, cfg, a, np.random.default_rng(0))
     # S: Epanechnikov (variance alpha^2 / 5); parameters: uniform (variance alpha^2 / 3)
     assert abs(np.var(z["S"]) / a["S"] ** 2 - 0.2) < 2e-3
     for k in ("sigma", "r"):
         assert abs(np.var(z[k]) / a[k] ** 2 - 1 / 3) < 2e-3
         assert np.max(np.abs(z[k] - getattr(spec, k))) <= a[k]
     assert np.all(z["d"] == spec.d)
-    zp = isd_multi(spec, cfg, dims, np.random.default_rng(0), N=1000, widen=1.3)
-    assert len(zp["S"]) == 1000
-    assert np.isclose(np.max(np.abs(zp["sigma"] - 0.2)), 1.3 * a["sigma"], rtol=1e-2)
-    assert np.max(np.abs(zp["S"] - 40.0)) <= a["S"]          # S is not widened
+    assert len(isd_multi(spec, cfg, a, np.random.default_rng(0), N=1000)["S"]) == 1000
+
+
+def test_multi_pilot_widths():
+    from simgreeks.multi import MultiConfig, fixed_widths, pilot_widths
+    spec = PutSpec(sigma=0.2, T=1.0)
+    cfg = MultiConfig()
+    assert pilot_widths(spec, cfg, ("S", "sigma")) == {"S": 10.0, "sigma": 0.6 * 0.2}
+    assert np.isclose(pilot_widths(spec, cfg, ("S", "r"))["r"], 1.3 * 0.02)
+    fixed = MultiConfig(widths="fixed")
+    assert pilot_widths(spec, fixed, ("S", "sigma")) == {
+        "S": fixed_widths(spec, fixed, ("S",))["S"], "sigma": 1.3 * 0.25 * 0.2}
 
 
 def test_multi_taylor_regression_recovers_vera():
     from simgreeks.multi import MultiConfig, greeks_multi, isd_multi
     spec = PutSpec(S0=40.0, sigma=0.2, r=0.06)
-    dims = ("S", "sigma", "r")
-    cfg = MultiConfig(N=20_000, groups=(dims,))
-    z = isd_multi(spec, cfg, dims, np.random.default_rng(1))
+    cfg = MultiConfig(N=20_000)
+    z = isd_multi(spec, cfg, {"S": 5.0, "sigma": 0.05, "r": 0.02}, np.random.default_rng(1))
     x, s, r = z["S"] - 40.0, z["sigma"] - 0.2, z["r"] - 0.06
     Y = 2.0 - 0.4 * x + 15.0 * s - 9.0 * r + 3.0 * s * r + 0.7 * x * s + 4.0 * s ** 2
-    g = greeks_multi(spec, cfg, dims, z, Y)
+    g = greeks_multi(spec, cfg, ("S", "sigma", "r"), z, Y)
     expect = dict(price=2.0, delta=-0.4, vega=15.0, rho=-9.0, vera=3.0, vanna=0.7, volga=8.0)
     for k, v in expect.items():
         assert np.isclose(g[k], v, rtol=1e-6, atol=1e-8), k
     assert np.isnan(g["rho_d"])
 
 
+def test_multi_partial_residual():
+    from simgreeks.multi import MultiConfig, isd_multi, partial_residual, taylor_fit
+    spec = PutSpec(S0=40.0, sigma=0.2)
+    cfg = MultiConfig()
+    z = isd_multi(spec, cfg, {"S": 5.0, "sigma": 0.05}, np.random.default_rng(2), N=20_000)
+    x, s = z["S"] - 40.0, z["sigma"] - 0.2
+    f_S, f_sigma = 2.0 - 0.4 * x + 0.03 * x ** 2, 15.0 * s + 4.0 * s ** 2
+    Y = f_S + f_sigma + 0.7 * x * s
+    fit = taylor_fit(spec, cfg, z, Y)
+    assert np.allclose(partial_residual(fit, Y, "S"), f_S, atol=1e-8)
+    assert np.allclose(partial_residual(fit, Y, "sigma"), 2.0 + f_sigma, atol=1e-8)
+
+
+def test_multi_select_widths_on_a_known_curve():
+    # Exact premium-like curve with a quartic term in S and in sigma: the
+    # selector must return widths inside the caps and smaller where the
+    # quartic is larger.
+    from simgreeks.multi import MultiConfig, isd_multi, pilot_widths, select_widths
+    spec = PutSpec(S0=40.0, sigma=0.2)
+    cfg = MultiConfig()
+    a0 = pilot_widths(spec, cfg, ("S", "sigma"))
+    rng = np.random.default_rng(4)
+    z = isd_multi(spec, cfg, a0, rng, N=50_000)
+    x, s = z["S"] - 40.0, z["sigma"] - 0.2
+    noise = 0.05 * rng.standard_normal(50_000)
+    widths = []
+    for c4 in (1e-5, 1e-3):
+        Y = 0.1 * x + 0.01 * x ** 2 + c4 * x ** 4 + 5.0 * s + c4 * 1e8 * s ** 4 + noise
+        widths.append(select_widths(spec, cfg, z, Y, a0))
+    for w in widths:
+        assert 0 < w["S"] <= a0["S"] and 0 < w["sigma"] <= a0["sigma"] / cfg.pilot_widen
+    assert widths[1]["S"] < widths[0]["S"] and widths[1]["sigma"] < widths[0]["sigma"]
+
+
 def test_multi_exercise_rules_out_of_sample():
-    from simgreeks.multi import MultiConfig, brownian, exercise_rules, isd_multi, lsm_multi
+    from simgreeks.multi import MultiConfig, brownian, isd_multi, lsm_multi
     spec = PutSpec(K=40, T=0.5)
     cfg = MultiConfig(N=20_000)
-    dims = ("S", "sigma")
     rng = np.random.default_rng(3)
-    rules = exercise_rules(spec, cfg, dims, rng)
-    assert set(rules) == set(range(1, spec.J))
-    z = isd_multi(spec, cfg, dims, rng)
+    a0, a = {"S": 10.0, "sigma": 0.12}, {"S": 4.0, "sigma": 0.05}
+    zp = isd_multi(spec, cfg, a0, rng)
+    _, Yp, rules = lsm_multi(spec, cfg, zp, brownian(spec, cfg.N, rng), a0,
+                             value_function=False)
+    assert Yp is None and set(rules) == set(range(1, spec.J))
+    z = isd_multi(spec, cfg, a, rng)
     W = brownian(spec, cfg.N, rng)
-    Yn_out, Yvf_out, used = lsm_multi(spec, cfg, dims, z, W, rules)
+    Yn_out, Yvf_out, used = lsm_multi(spec, cfg, z, W, a0, rules)
     assert used is not rules and all(used[j] is rules[j] for j in rules)
     assert np.all(np.isfinite(Yn_out)) and np.all(np.isfinite(Yvf_out))
-    _, _, fits = lsm_multi(spec, cfg, dims, z, W)            # in-sample: own fits
+    _, _, fits = lsm_multi(spec, cfg, z, W, a)               # in-sample: own fits
     assert not np.allclose(fits[10][0], rules[10][0])
-    assert lsm_multi(spec, cfg, dims, z, W, rules, value_function=False)[1] is None
+
+
+def test_multi_label_widths():
+    from simgreeks.multi import MultiConfig, label
+    spec = PutSpec(K=40, T=0.5)
+    out = label(spec, MultiConfig(N=20_000), 5)
+    assert 0 < out["alpha_S"] <= 10.0 and 0 < out["alpha_sigma"] <= 0.6 * 0.2 / 1.3
+    assert out["alpha_r"] == out["alpha_d"] == 0.02
+    fixed = label(spec, MultiConfig(N=20_000, widths="fixed"), 5)
+    assert np.isclose(fixed["alpha_S"], 0.6 * 40 * 0.2 * np.sqrt(0.5))
+    assert np.isclose(fixed["alpha_sigma"], 0.25 * 0.2)
 
 
 def test_multi_config_validation():
     import pytest
     from simgreeks.multi import MultiConfig
-    with pytest.raises(ValueError):
-        MultiConfig(exercise_rule="oos")
-    with pytest.raises(ValueError):
-        MultiConfig(param_kernel="gauss")
-    with pytest.raises(ValueError):
-        MultiConfig(c_sigma=0.8, pilot_widen=1.3)        # pilot sigma could reach 0
-    MultiConfig(c_sigma=0.8, exercise_rule="insample")
-    with pytest.raises(ValueError):
-        MultiConfig(pilot_widen=0.9)
+    for bad in (dict(exercise_rule="oos"), dict(param_kernel="gauss"), dict(widths="auto"),
+                dict(select=("r",)), dict(c_sigma=0.8, pilot_widen=1.3),
+                dict(c0_sigma=1.0), dict(pilot_widen=0.9)):
+        with pytest.raises(ValueError):
+            MultiConfig(**bad)
+    MultiConfig(c_sigma=0.8, pilot_widen=1.2)
