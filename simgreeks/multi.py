@@ -90,6 +90,7 @@ DIMS = ("S", "sigma", "r", "d")
 PARAMS = ("sigma", "r", "d")
 STYLES = ("bermudan", "european")
 EXERCISE_RULES = ("pilot", "insample")
+VF_RULES = ("max", "rule")
 PARAM_KERNELS = ("uniform", "epanechnikov")
 WIDTHS = ("selector", "fixed")
 NU = {"S": 2, "sigma": 2}          # derivative each selected width is optimised for
@@ -140,6 +141,7 @@ class MultiConfig:
     param_degree: int = 3          # all bases: |a| <= param_degree
     style: str = "bermudan"        # "bermudan" (LSM) or "european" (no early exercise)
     control_variate: bool = True   # European control variate (see module doc)
+    vf_rule: str = "rule"          # V(t_1) by the exercise rule (default) or max(Z, C_1); see lsm_multi
     american_t0: bool = True       # exercise at t_0 when optimal (bermudan only)
 
     def __post_init__(self):
@@ -149,7 +151,8 @@ class MultiConfig:
         for name, value, allowed in (("style", self.style, STYLES),
                                      ("param_kernel", self.param_kernel, PARAM_KERNELS),
                                      ("exercise_rule", self.exercise_rule, EXERCISE_RULES),
-                                     ("widths", self.widths, WIDTHS)):
+                                     ("widths", self.widths, WIDTHS),
+                                     ("vf_rule", self.vf_rule, VF_RULES)):
             if value not in allowed:
                 raise ValueError(f"unknown {name} {value!r}")
         if not set(self.select) <= set(NU):
@@ -371,8 +374,9 @@ def lsm_multi(spec: PutSpec, cfg: MultiConfig, z: dict, W: np.ndarray, scale: di
     Exercise rule at t_1..t_{J-1}: in-the-money regression on (S, parameters),
     fitted on these paths if ``rules`` is None, else the stored fits
     ``rules[j]`` are applied (out of sample). ``rules`` returned are the fits used.
-    Y_vf = e^{-r_n dt} V(t_1) with V = max(Z, C_1) ("bermudan") or V = C_1
-    ("european"), C_1 fitted on all paths; with cfg.control_variate, Y_vf is
+    Y_vf = e^{-r_n dt} V(t_1) with V = C_1 ("european") or, for "bermudan",
+    V = max(Z, C_1) (cfg.vf_rule="max") or V = Z where the exercise rule at t_1
+    exercises and C_1 elsewhere ("rule"); C_1 is fitted on all paths; with cfg.control_variate, Y_vf is
     the premium label e^{-r_n dt} (V(t_1) - E_1) (see module doc). With
     ``value_function=False`` Y_vf is None.
     """
@@ -412,10 +416,20 @@ def lsm_multi(spec: PutSpec, cfg: MultiConfig, z: dict, W: np.ndarray, scale: di
                 E1 = european_put(Sj, spec.K, tau, z["sigma"], z["r"], z["d"])
                 D1 = np.exp(-z["r"] * tau) * euro_payoff
                 prem = _fitted(Sj, mono_vf, index_vf, cash - D1, cfg.M_tau)
-                Y_vf = disc * (np.maximum(ex - E1, prem) if cfg.style == "bermudan" else prem)
+                if cfg.style == "european":
+                    Y_vf = disc * prem
+                elif cfg.vf_rule == "rule":
+                    Y_vf = disc * np.where(exercise, ex - E1, prem)
+                else:
+                    Y_vf = disc * np.maximum(ex - E1, prem)
             else:
                 cont = _fitted(Sj, mono_vf, index_vf, cash, cfg.M_tau)
-                Y_vf = disc * (np.maximum(ex, cont) if cfg.style == "bermudan" else cont)
+                if cfg.style == "european":
+                    Y_vf = disc * cont
+                elif cfg.vf_rule == "rule":
+                    Y_vf = disc * np.where(exercise, ex, cont)
+                else:
+                    Y_vf = disc * np.maximum(ex, cont)
         cash = np.where(exercise, ex, cash)
     return disc * cash, Y_vf, fits
 
