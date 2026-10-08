@@ -138,7 +138,7 @@ def test_multi_control_variate_is_exact_for_european():
     spec = PutSpec(K=42, sigma=0.3, T=0.5, d=0.02)
     out = label(spec, MultiConfig(N=20_000, style="european"), 1)
     bs = bs_put(spec)
-    for k in ("price", "delta", "gamma", "vega", "rho", "rho_d", "vanna"):
+    for k in ("price", "delta", "gamma", "vega", "volga", "rho", "rho_d", "vanna", "vera"):
         assert np.isclose(out[k], bs[k], rtol=1e-6, atol=1e-8), k
 
 
@@ -153,5 +153,71 @@ def test_reference_bumped_greeks_match_closed_form():
     from simgreeks.reference import bs_put, put_fd_greeks
     spec = PutSpec(K=44, sigma=0.3, T=1.5, r=0.05, d=0.02)
     f, b = put_fd_greeks(spec, "european"), bs_put(spec)
-    for k in ("vega", "rho", "rho_d", "vanna", "delta_r", "delta_d"):
+    for k in ("vega", "rho", "rho_d", "vanna", "vera", "volga", "delta_r", "delta_d"):
         assert abs(f[k] - b[k]) < 1e-3 * max(1.0, abs(b[k])), k
+
+
+def test_multi_isd_design():
+    from simgreeks.multi import MultiConfig, dispersion_sizes, isd_multi
+    spec = PutSpec(sigma=0.2, r=0.05)
+    cfg = MultiConfig(N=50_000)
+    dims = ("S", "sigma", "r")
+    a = dispersion_sizes(spec, cfg, dims)
+    z = isd_multi(spec, cfg, dims, np.random.default_rng(0))
+    # S: Epanechnikov (variance alpha^2 / 5); parameters: uniform (variance alpha^2 / 3)
+    assert abs(np.var(z["S"]) / a["S"] ** 2 - 0.2) < 2e-3
+    for k in ("sigma", "r"):
+        assert abs(np.var(z[k]) / a[k] ** 2 - 1 / 3) < 2e-3
+        assert np.max(np.abs(z[k] - getattr(spec, k))) <= a[k]
+    assert np.all(z["d"] == spec.d)
+    zp = isd_multi(spec, cfg, dims, np.random.default_rng(0), N=1000, widen=1.3)
+    assert len(zp["S"]) == 1000
+    assert np.isclose(np.max(np.abs(zp["sigma"] - 0.2)), 1.3 * a["sigma"], rtol=1e-2)
+    assert np.max(np.abs(zp["S"] - 40.0)) <= a["S"]          # S is not widened
+
+
+def test_multi_taylor_regression_recovers_vera():
+    from simgreeks.multi import MultiConfig, greeks_multi, isd_multi
+    spec = PutSpec(S0=40.0, sigma=0.2, r=0.06)
+    dims = ("S", "sigma", "r")
+    cfg = MultiConfig(N=20_000, groups=(dims,))
+    z = isd_multi(spec, cfg, dims, np.random.default_rng(1))
+    x, s, r = z["S"] - 40.0, z["sigma"] - 0.2, z["r"] - 0.06
+    Y = 2.0 - 0.4 * x + 15.0 * s - 9.0 * r + 3.0 * s * r + 0.7 * x * s + 4.0 * s ** 2
+    g = greeks_multi(spec, cfg, dims, z, Y)
+    expect = dict(price=2.0, delta=-0.4, vega=15.0, rho=-9.0, vera=3.0, vanna=0.7, volga=8.0)
+    for k, v in expect.items():
+        assert np.isclose(g[k], v, rtol=1e-6, atol=1e-8), k
+    assert np.isnan(g["rho_d"])
+
+
+def test_multi_exercise_rules_out_of_sample():
+    from simgreeks.multi import MultiConfig, brownian, exercise_rules, isd_multi, lsm_multi
+    spec = PutSpec(K=40, T=0.5)
+    cfg = MultiConfig(N=20_000)
+    dims = ("S", "sigma")
+    rng = np.random.default_rng(3)
+    rules = exercise_rules(spec, cfg, dims, rng)
+    assert set(rules) == set(range(1, spec.J))
+    z = isd_multi(spec, cfg, dims, rng)
+    W = brownian(spec, cfg.N, rng)
+    Yn_out, Yvf_out, used = lsm_multi(spec, cfg, dims, z, W, rules)
+    assert used is not rules and all(used[j] is rules[j] for j in rules)
+    assert np.all(np.isfinite(Yn_out)) and np.all(np.isfinite(Yvf_out))
+    _, _, fits = lsm_multi(spec, cfg, dims, z, W)            # in-sample: own fits
+    assert not np.allclose(fits[10][0], rules[10][0])
+    assert lsm_multi(spec, cfg, dims, z, W, rules, value_function=False)[1] is None
+
+
+def test_multi_config_validation():
+    import pytest
+    from simgreeks.multi import MultiConfig
+    with pytest.raises(ValueError):
+        MultiConfig(exercise_rule="oos")
+    with pytest.raises(ValueError):
+        MultiConfig(param_kernel="gauss")
+    with pytest.raises(ValueError):
+        MultiConfig(c_sigma=0.8, pilot_widen=1.3)        # pilot sigma could reach 0
+    MultiConfig(c_sigma=0.8, exercise_rule="insample")
+    with pytest.raises(ValueError):
+        MultiConfig(pilot_widen=0.9)

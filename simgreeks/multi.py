@@ -8,9 +8,10 @@ own z_n, e.g. for the group (S, sigma)
 
     z_n = z0 + (alpha_S k(U_n1), alpha_sigma k(U_n2), 0, 0),
 
-with k the Epanechnikov map of eq. (25) applied to each coordinate (product
-design) and U_n a scrambled Sobol point. The parameters stay constant along
-the path,
+with U_n a scrambled Sobol point (product design), k the Epanechnikov map of
+eq. (25) for S and, by default, the uniform map k(u) = 2u - 1 for the
+parameters (MultiConfig.param_kernel; see "Exercise rule" below for why). The
+parameters stay constant along the path,
 
     S_n(t_j) = S_n exp((r_n - d_n - sigma_n^2 / 2) t_j + sigma_n W_n(t_j)),
 
@@ -28,6 +29,22 @@ x_S^i x_sigma^a1 x_r^a2 x_d^a3 gives the derivative
 
 The bases keep the terms with i + weight |a| <= M and |a| <= param_degree.
 
+Exercise rule (exercise_rule="pilot", default). The exercise regressions are
+fitted on an independent pilot set of paths whose parameter box is
+pilot_widen times wider, and the stored rules are applied to the main paths.
+Two effects bias the second derivatives in the parameters (Volga) when the
+rule is fitted on the main paths themselves ("insample"):
+  * the parameters do not diffuse, so at every exercise date the regression
+    sees the ISD's parameter density; the Epanechnikov density vanishes at the
+    edges of the box, where the fitted rule is then poorest;
+  * an in-sample rule has foresight, which raises the value most where the
+    regression's leverage is largest, i.e. at the edges of the box.
+The second effect is U-shaped in each parameter and biased Volga upwards
+(+50 % median over the check grid; the bias shrank with N). An out-of-sample
+rule has no foresight: its error only makes the rule suboptimal, which lowers
+the value (a small low bias in the price, the usual LSM lower bound). The
+uniform design and the wider pilot box keep that error flat over the main box.
+
 European control variate (control_variate=True): C_1 = E_1 + pi_1, with E_1
 the European put value at t_1 for the path's own state and parameters
 (closed form) and pi_1 the regression of the early-exercise premium cash flow.
@@ -42,7 +59,8 @@ from the run that disperses its parameter; Theta follows from the PDE identity
 
 The dispersion sizes are PLACEHOLDERS (no selector yet), and each run uses the
 whole sample in one pass at those sizes: with a fixed alpha*, the paper's
-2-step method reduces to this single pass.
+2-step method reduces to this single pass. The pilot paths only estimate the
+exercise rule; they are not the paper's 2-step pilot.
 """
 from __future__ import annotations
 
@@ -64,7 +82,9 @@ from .selector import ALPHA_CAP
 DIMS = ("S", "sigma", "r", "d")
 PARAMS = ("sigma", "r", "d")
 STYLES = ("bermudan", "european")
-GROUPS = (("S", "sigma"), ("S", "r"), ("S", "d"))
+EXERCISE_RULES = ("pilot", "insample")
+PARAM_KERNELS = ("uniform", "epanechnikov")
+GROUPS = (("S", "sigma"), ("S", "r"), ("S", "d"), ("S", "sigma", "r"))
 
 # Greek name -> multi-index (i_S, a_sigma, a_r, a_d) of the t = 0 polynomial
 GREEKS = {
@@ -72,10 +92,11 @@ GREEKS = {
     "delta": (1, 0, 0, 0),
     "gamma": (2, 0, 0, 0),
     "vega": (0, 1, 0, 0),
-    "volga": (0, 2, 0, 0),       # biased and noisy in the checks: not a usable label
+    "volga": (0, 2, 0, 0),
     "rho": (0, 0, 1, 0),
     "rho_d": (0, 0, 0, 1),
     "vanna": (1, 1, 0, 0),       # d2P / dS dsigma
+    "vera": (0, 1, 1, 0),        # d2P / dsigma dr
     "delta_r": (1, 0, 1, 0),     # d2P / dS dr
     "delta_d": (1, 0, 0, 1),     # d2P / dS dd
 }
@@ -98,6 +119,10 @@ class MultiConfig:
     style: str = "bermudan"        # "bermudan" (LSM) or "european" (no early exercise)
     control_variate: bool = True   # European control variate (see module doc)
     american_t0: bool = False      # report American values when exercising at t_0 is optimal
+    param_kernel: str = "uniform"  # ISD map of sigma, r, d (S keeps eq. 25's Epanechnikov)
+    exercise_rule: str = "pilot"   # "pilot": fitted on independent paths; "insample"
+    N_pilot: int | None = None     # pilot paths (default N)
+    pilot_widen: float = 1.3       # pilot parameter box = pilot_widen x the run's box
 
     def __post_init__(self):
         for dims in self.groups:
@@ -105,8 +130,15 @@ class MultiConfig:
                 raise ValueError(f"each group must contain 'S' and be a subset of {DIMS}")
         if self.style not in STYLES:
             raise ValueError(f"unknown style {self.style!r}")
-        if not 0 < self.c_sigma < 1:
-            raise ValueError("c_sigma must be in (0, 1) to keep sigma positive")
+        if self.param_kernel not in PARAM_KERNELS:
+            raise ValueError(f"unknown param_kernel {self.param_kernel!r}")
+        if self.exercise_rule not in EXERCISE_RULES:
+            raise ValueError(f"unknown exercise_rule {self.exercise_rule!r}")
+        if self.pilot_widen < 1:
+            raise ValueError("pilot_widen must be >= 1")
+        widen = self.pilot_widen if self.exercise_rule == "pilot" else 1.0
+        if not 0 < self.c_sigma * widen < 1:
+            raise ValueError("c_sigma (x pilot_widen) must be in (0, 1) to keep sigma positive")
 
 
 def _center(spec: PutSpec) -> dict:
@@ -120,17 +152,24 @@ def dispersion_sizes(spec: PutSpec, cfg: MultiConfig, dims) -> dict:
     return {k: a[k] for k in DIMS if k in dims}
 
 
-def isd_multi(spec: PutSpec, cfg: MultiConfig, dims, rng: np.random.Generator) -> dict:
-    """Initial states z_n: product Epanechnikov design on scrambled Sobol points."""
+def isd_multi(spec: PutSpec, cfg: MultiConfig, dims, rng: np.random.Generator,
+              N: int | None = None, widen: float = 1.0) -> dict:
+    """Initial states z_n on scrambled Sobol points (product design): S by the
+    Epanechnikov map of eq. (25), the parameters by cfg.param_kernel. ``widen``
+    scales the parameter box (pilot paths)."""
+    N = N or cfg.N
     alphas = dispersion_sizes(spec, cfg, dims)
     with warnings.catch_warnings():           # N need not be a power of 2 here
         warnings.simplefilter("ignore", UserWarning)
-        U = qmc.Sobol(d=len(alphas), scramble=True, seed=rng).random(cfg.N)
-    U = np.clip(U, 0.5 / cfg.N, 1 - 0.5 / cfg.N)
+        U = qmc.Sobol(d=len(alphas), scramble=True, seed=rng).random(N)
+    U = np.clip(U, 0.5 / N, 1 - 0.5 / N)
     center = _center(spec)
-    z = {k: np.full(cfg.N, v) for k, v in center.items()}
+    z = {k: np.full(N, v) for k, v in center.items()}
     for col, (k, a) in enumerate(alphas.items()):
-        z[k] = center[k] + a * isd_kernel(U[:, col])
+        if k == "S":
+            z[k] = center[k] + a * isd_kernel(U[:, col], "epanechnikov")
+        else:
+            z[k] = center[k] + widen * a * isd_kernel(U[:, col], cfg.param_kernel)
     return z
 
 
@@ -196,11 +235,27 @@ def _solve(A, y):
         return np.linalg.lstsq(A, y, rcond=None)[0]
 
 
+def _design_s(S, lo, hi, mono, index, M):
+    return design(cheb.chebvander((2.0 * S - (lo + hi)) / (hi - lo), M), mono, index)
+
+
 def _fitted(S, mono, index, y, M):
     """Fitted values of the regression of y on Chebyshev(S) x parameter monomials."""
     lo, hi = S.min(), max(S.max(), S.min() + 1e-12)
-    A = design(cheb.chebvander((2.0 * S - (lo + hi)) / (hi - lo), M), mono, index)
+    A = _design_s(S, lo, hi, mono, index, M)
     return A @ _solve(A, y)
+
+
+def _fit(S, mono, index, y, M):
+    """The same regression, returned as (coefficients, lo, hi) for later use."""
+    lo, hi = S.min(), max(S.max(), S.min() + 1e-12)
+    return _solve(_design_s(S, lo, hi, mono, index, M), y), lo, hi
+
+
+def _predict(fit, S, mono, index, M):
+    """Evaluate a stored fit; S is clipped to the fit's data range."""
+    coef, lo, hi = fit
+    return _design_s(np.clip(S, lo, hi), lo, hi, mono, index, M) @ coef
 
 
 def _params(spec, cfg, dims, z, scale):
@@ -208,22 +263,28 @@ def _params(spec, cfg, dims, z, scale):
     center = _center(spec)
     params = [k for k in PARAMS if k in dims]
     P = np.column_stack([(z[k] - center[k]) / scale[k] for k in params]) \
-        if params else np.empty((cfg.N, 0))
+        if params else np.empty((len(z["S"]), 0))
     return params, P
 
 
 # --------------------------------------------------------------------------
 # One run: LSM and the t = 0 regression for one group of dispersed coordinates
 # --------------------------------------------------------------------------
-def lsm_multi(spec: PutSpec, cfg: MultiConfig, dims, z: dict, W: np.ndarray):
-    """LSM with per-path parameters. Returns (Y_naive, Y_vf), both discounted to t = 0.
+def lsm_multi(spec: PutSpec, cfg: MultiConfig, dims, z: dict, W: np.ndarray,
+              rules: dict | None = None, value_function: bool = True):
+    """LSM with per-path parameters. Returns (Y_naive, Y_vf, rules), Y_naive and
+    Y_vf discounted to t = 0.
 
-    Exercise rule at t_1..t_{J-1}: in-the-money regression on (S, parameters).
+    Exercise rule at t_1..t_{J-1}: in-the-money regression on (S, parameters),
+    fitted on these paths if ``rules`` is None, else the stored fits
+    ``rules[j]`` are applied (out of sample). ``rules`` returned are the fits used.
     Y_vf = e^{-r_n dt} V(t_1) with V = max(Z, C_1) ("bermudan") or V = C_1
     ("european"), C_1 fitted on all paths; with cfg.control_variate, Y_vf is
-    the premium label e^{-r_n dt} (V(t_1) - E_1) (see module doc).
+    the premium label e^{-r_n dt} (V(t_1) - E_1) (see module doc). With
+    ``value_function=False`` (pilot paths) Y_vf is None.
     """
     J = spec.J
+    N = len(z["S"])
     params, P = _params(spec, cfg, dims, z, dispersion_sizes(spec, cfg, dims))
     mono, index = monomials(P, basis_terms(cfg.M_tau, len(params), cfg.weight,
                                            cfg.param_degree))
@@ -233,29 +294,37 @@ def lsm_multi(spec: PutSpec, cfg: MultiConfig, dims, z: dict, W: np.ndarray):
     cash = spec.payoff(stock_at(spec, z, W, J))
     euro_payoff = cash.copy()
     if J == 1:
-        return disc * cash, disc * cash
+        return disc * cash, disc * cash, {}
     Y_vf = None
+    fits = {}
     for j in range(J - 1, 0, -1):
         cash *= disc
         Sj = stock_at(spec, z, W, j)
         ex = spec.payoff(Sj)
-        exercise = np.zeros(cfg.N, dtype=bool)
+        exercise = np.zeros(N, dtype=bool)
         if cfg.style == "bermudan":
             itm = ex > 0.0
-            if itm.sum() > 5 * len(index):
-                cont = _fitted(Sj[itm], mono[itm], index, cash[itm], cfg.M_tau)
-                exercise[itm] = ex[itm] >= cont
-        if j == 1 and cfg.control_variate:
-            tau = spec.T - spec.dt
-            E1 = european_put(Sj, spec.K, tau, z["sigma"], z["r"], z["d"])
-            D1 = np.exp(-z["r"] * tau) * euro_payoff
-            prem = _fitted(Sj, mono_vf, index_vf, cash - D1, cfg.M_tau)
-            Y_vf = disc * (np.maximum(ex - E1, prem) if cfg.style == "bermudan" else prem)
-        elif j == 1:
-            cont = _fitted(Sj, mono_vf, index_vf, cash, cfg.M_tau)
-            Y_vf = disc * (np.maximum(ex, cont) if cfg.style == "bermudan" else cont)
+            if rules is not None:
+                fits[j] = rules.get(j)
+            elif itm.sum() > 5 * len(index):
+                fits[j] = _fit(Sj[itm], mono[itm], index, cash[itm], cfg.M_tau)
+            else:
+                fits[j] = None
+            if fits[j] is not None and itm.any():
+                exercise[itm] = ex[itm] >= _predict(fits[j], Sj[itm], mono[itm], index,
+                                                    cfg.M_tau)
+        if j == 1 and value_function:
+            if cfg.control_variate:
+                tau = spec.T - spec.dt
+                E1 = european_put(Sj, spec.K, tau, z["sigma"], z["r"], z["d"])
+                D1 = np.exp(-z["r"] * tau) * euro_payoff
+                prem = _fitted(Sj, mono_vf, index_vf, cash - D1, cfg.M_tau)
+                Y_vf = disc * (np.maximum(ex - E1, prem) if cfg.style == "bermudan" else prem)
+            else:
+                cont = _fitted(Sj, mono_vf, index_vf, cash, cfg.M_tau)
+                Y_vf = disc * (np.maximum(ex, cont) if cfg.style == "bermudan" else cont)
         cash = np.where(exercise, ex, cash)
-    return disc * cash, Y_vf
+    return disc * cash, Y_vf, fits
 
 
 def greeks_multi(spec: PutSpec, cfg: MultiConfig, dims, z: dict, Y: np.ndarray,
@@ -283,12 +352,24 @@ def greeks_multi(spec: PutSpec, cfg: MultiConfig, dims, z: dict, Y: np.ndarray,
     return out
 
 
+def exercise_rules(spec: PutSpec, cfg: MultiConfig, dims, rng) -> dict:
+    """Exercise fits estimated on independent pilot paths (cfg.N_pilot paths,
+    parameter box widened by cfg.pilot_widen)."""
+    Np = cfg.N_pilot or cfg.N
+    zp = isd_multi(spec, cfg, dims, rng, Np, cfg.pilot_widen)
+    Wp = brownian(spec, Np, rng)
+    return lsm_multi(spec, cfg, dims, zp, Wp, value_function=False)[2]
+
+
 def run_group(spec: PutSpec, cfg: MultiConfig, dims, seed) -> dict:
     """One run with the coordinates ``dims`` dispersed."""
     rng = np.random.default_rng(seed)
+    rules = None
+    if cfg.style == "bermudan" and cfg.exercise_rule == "pilot":
+        rules = exercise_rules(spec, cfg, dims, rng)
     z = isd_multi(spec, cfg, dims, rng)
     W = brownian(spec, cfg.N, rng)
-    _, Y = lsm_multi(spec, cfg, dims, z, W)
+    _, Y, _ = lsm_multi(spec, cfg, dims, z, W, rules)
     return greeks_multi(spec, cfg, dims, z, Y, bs_put(spec) if cfg.control_variate else None)
 
 

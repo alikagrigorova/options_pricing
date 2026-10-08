@@ -33,9 +33,10 @@ from simgreeks.report import Z99  # noqa: E402
 from simgreeks.runner import run_configs  # noqa: E402
 
 RESULTS = ROOT / "results"
+GREEK_LETTERS = {"sigma": "σ"}
 KEYS = ["T", "sigma", "r", "d", "K"]
-QUANTS = ["price", "delta", "gamma", "theta", "vega", "rho", "rho_d", "vanna",
-          "delta_r", "delta_d", "volga"]
+QUANTS = ["price", "delta", "gamma", "theta", "vega", "volga", "rho", "rho_d", "vanna",
+          "vera", "delta_r", "delta_d"]
 
 
 def american_grid():
@@ -127,7 +128,8 @@ def check(name, cells, cfg, reps, seed, title, intro, workers=None):
 
 def timing():
     cfg = MultiConfig()
-    lines = ["# Seconds per label (one process, default MultiConfig: 3 runs x 100,000 paths)\n",
+    lines = [f"# Seconds per label (one process, default MultiConfig: {len(cfg.groups)} runs "
+             "x (100,000 pilot + 100,000 main paths))\n",
              "| T | seconds |", "|---|---|"]
     for T in (0.5, 1.0, 2.0):
         spec = PutSpec(K=40, T=T)
@@ -148,10 +150,12 @@ def main():
     ap.add_argument("--workers", type=int, default=None,
                     help="processes (default: all cores; ~300 MB each)")
     args = ap.parse_args()
+    groups = ", ".join("(" + ", ".join(GREEK_LETTERS.get(k, k) for k in g) + ")"
+                       for g in MultiConfig().groups)
     common = (f"{args.reps} replications per option; one label = independent runs with "
-              "(S, σ), (S, r) and (S, d) dispersed, 100,000 paths each. Dispersion: "
-              "α_S = 0.6 S0 σ √T, α_σ = 0.25 σ, α_r = α_d = 0.02 (placeholders). "
-              "Not part of the paper.")
+              f"{groups} dispersed, 100,000 paths each. Dispersion: "
+              "α_S = 0.6 S0 σ √T (Epanechnikov), α_σ = 0.25 σ, α_r = α_d = 0.02 "
+              "(uniform); all placeholders. Not part of the paper.")
     for e in args.experiments:
         if e == "european":
             check("european", european_grid(),
@@ -162,7 +166,9 @@ def main():
         elif e == "american":
             check("american", american_grid(), MultiConfig(), args.reps, 7002,
                   "Multivariate ISD, Bermudan put vs reference PDE pricer",
-                  common + " European control variate on. Reference: Crank-Nicolson "
+                  common + " Exercise rules fitted on independent pilot paths (100,000 "
+                  "per run, parameter box 1.3× wider). European control variate on. "
+                  "Reference: Crank-Nicolson "
                   "(simgreeks.reference), Greeks in σ, r, d by bumping with Richardson "
                   "extrapolation; Theta = 0 in the exercise region (core.theta_pde).",
                   args.workers)

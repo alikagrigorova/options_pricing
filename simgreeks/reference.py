@@ -150,6 +150,7 @@ def put_fd_greeks(spec: PutSpec, style: str = "bermudan", grid: FDGrid = FDGrid(
       vega, rho, rho_d       : (P(+h) - P(-h)) / 2h
       volga                  : (P(+h) - 2 P + P(-h)) / h^2   (sigma only)
       vanna, delta_r, delta_d: (Delta(+h) - Delta(-h)) / 2h
+      vera                   : (P(++) - P(+-) - P(-+) + P(--)) / (4 h_sigma h_r)
     """
     grid = replace(grid, half_width=grid.half_width or _half_width(spec, grid))
     base = put_fd(spec, style, grid)
@@ -166,9 +167,17 @@ def put_fd_greeks(spec: PutSpec, style: str = "bermudan", grid: FDGrid = FDGrid(
             D["volga"] = (up["price"] - 2 * base["price"] + dn["price"]) / h ** 2
         return D
 
+    def cross(hs, hr):
+        P = {(a, b): put_fd(replace(spec, sigma=spec.sigma + a * hs, r=spec.r + b * hr),
+                            style, grid)["price"] for a in (1, -1) for b in (1, -1)}
+        return (P[1, 1] - P[1, -1] - P[-1, 1] + P[-1, -1]) / (4 * hs * hr)
+
     for k, h in bumps.items():
         coarse, fine = differences(k, h), differences(k, h / 2)
         out.update({q: (4 * fine[q] - coarse[q]) / 3 for q in coarse})
+    if "sigma" in bumps and "r" in bumps:
+        hs, hr = bumps["sigma"], bumps["r"]
+        out["vera"] = (4 * cross(hs / 2, hr / 2) - cross(hs, hr)) / 3
     return out
 
 
@@ -186,5 +195,5 @@ def bs_put(spec: PutSpec) -> dict:
                        - d * S * ed * norm.cdf(-d1)),
                 vega=vega, volga=vega * d1 * d2 / s,
                 rho=-K * T * er * norm.cdf(-d2), rho_d=S * T * ed * norm.cdf(-d1),
-                vanna=-ed * pdf * d2 / s, delta_r=ed * pdf * sq / s,
+                vanna=-ed * pdf * d2 / s, vera=-vega * d1 * sq / s, delta_r=ed * pdf * sq / s,
                 delta_d=T * ed * norm.cdf(-d1) - ed * pdf * sq / s)
