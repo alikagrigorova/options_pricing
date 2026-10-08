@@ -66,7 +66,9 @@ def reference(cells, style):
             f = bs_put(spec)
         else:
             f = put_fd_greeks(spec)
-            f["theta"] = 0.0 if f["ex_region"] else f["theta"]   # core.theta_pde convention
+            if f["ex_region"]:      # exercise at t_0 (MultiConfig.american_t0)
+                f.update({q: 0.0 for q in QUANTS})
+                f["price"], f["delta"] = spec.K - spec.S0, -1.0
         rows.append(dict(zip(KEYS, cell), **{q: f[q] for q in QUANTS}))
     return pd.DataFrame(rows)
 
@@ -180,9 +182,10 @@ def main():
     groups = ", ".join("(" + ", ".join(GREEK_LETTERS.get(k, k) for k in g) + ")"
                        for g in MultiConfig().groups)
     common = (f"{args.reps} replications per option; one label = independent runs with "
-              f"{groups} dispersed, 100,000 paths each. Dispersion: "
-              "α_S = 0.6 S0 σ √T (Epanechnikov), α_σ = 0.25 σ, α_r = α_d = 0.02 "
-              "(uniform); all placeholders. Not part of the paper.")
+              f"{groups} dispersed, each with 100,000 pilot and 100,000 main paths. "
+              "Widths: α_S (Epanechnikov) and α_σ (uniform) chosen per run on the pilot "
+              "paths by the paper's selector (local order ν + 1, targets Gamma and Volga); "
+              "α_r = α_d = 0.02 (uniform, placeholders). Not part of the paper.")
     for e in args.experiments:
         if e == "european":
             check("european", european_grid(),
@@ -193,11 +196,12 @@ def main():
         elif e == "american":
             check("american", american_grid(), MultiConfig(), args.reps, 7002,
                   "Multivariate ISD, Bermudan put vs reference PDE pricer",
-                  common + " Exercise rules fitted on independent pilot paths (100,000 "
-                  "per run, parameter box 1.3× wider). European control variate on. "
-                  "Reference: Crank-Nicolson "
-                  "(simgreeks.reference), Greeks in σ, r, d by bumping with Richardson "
-                  "extrapolation; Theta = 0 in the exercise region (core.theta_pde).",
+                  common + " Exercise rule fitted on the pilot paths rescaled to the "
+                  "chosen widths (parameter box 1.3× wider) and also used at t_1 in the "
+                  "value-function label. European control variate on. Reference: "
+                  "Crank-Nicolson (simgreeks.reference), Greeks in σ, r, d by bumping with "
+                  "Richardson extrapolation; in the exercise region the American values "
+                  "(price K − S0, Delta −1, other Greeks 0), as the labels.",
                   args.workers)
         else:
             timing()

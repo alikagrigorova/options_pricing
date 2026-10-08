@@ -1,4 +1,4 @@
-# Multivariate ISD, Bermudan put vs reference PDE pricer
+# Multivariate ISD v1 (fixed widths, max at t_1), Bermudan put vs reference PDE pricer
 
 100 replications per option; one label = independent runs with (S, σ), (S, r), (S, d) dispersed, 100,000 paths each. Dispersion: α_S = 0.6 S0 σ √T (Epanechnikov), α_σ = 0.25 σ, α_r = α_d = 0.02 (uniform); all placeholders. Not part of the paper. Exercise rules fitted on independent pilot paths (100,000 per run, parameter box 1.3× wider). European control variate on. Reference: Crank-Nicolson (simgreeks.reference), Greeks in σ, r, d by bumping with Richardson extrapolation; Theta = 0 in the exercise region (core.theta_pde).
 
