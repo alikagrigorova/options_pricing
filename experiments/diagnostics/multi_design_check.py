@@ -5,11 +5,12 @@ The first American check showed Volga biased upwards on 21 of 33 options
 (+50 % median). This locates the cause on the (S, sigma) run alone:
 
   insample-epa : exercise rule fitted on the same paths, Epanechnikov sigma
-                 design (the previous default)
+                 design (the first design)
   insample-uni : same paths, uniform sigma design
   pilot-epa    : rule fitted on independent pilot paths, Epanechnikov, same box
   pilot-uni    : independent pilot paths, uniform design, pilot box 1.3x wider
-                 (the current default)
+                 (the design that followed; the current one also chooses the
+                 widths on the pilot and decides exercise at t_1 by the rule)
 
 Seven options; references from reference.put_fd_greeks.
 
@@ -41,13 +42,14 @@ from simgreeks.runner import run_configs  # noqa: E402
 OUT = ROOT / "results" / "diagnostics" / "multi_design"
 SPECS = [PutSpec(K=36), PutSpec(K=40), PutSpec(K=44), PutSpec(K=36, sigma=0.1),
          PutSpec(K=40, sigma=0.4, T=0.5), PutSpec(K=40, r=0.0), PutSpec(K=44, d=0.06)]
-S_SIGMA = (("S", "sigma"),)
+# Fixed widths, max(Z, C) at t_1 and no exercise at t_0, so that only the
+# exercise rule and the sigma design differ between the variants.
+BASE = dict(groups=(("S", "sigma"),), widths="fixed", vf_rule="max", american_t0=False)
 VARIANTS = {
-    "insample-epa": MultiConfig(groups=S_SIGMA, exercise_rule="insample",
-                                param_kernel="epanechnikov"),
-    "insample-uni": MultiConfig(groups=S_SIGMA, exercise_rule="insample"),
-    "pilot-epa": MultiConfig(groups=S_SIGMA, param_kernel="epanechnikov", pilot_widen=1.0),
-    "pilot-uni": MultiConfig(groups=S_SIGMA),
+    "insample-epa": MultiConfig(**BASE, exercise_rule="insample", param_kernel="epanechnikov"),
+    "insample-uni": MultiConfig(**BASE, exercise_rule="insample"),
+    "pilot-epa": MultiConfig(**BASE, param_kernel="epanechnikov", pilot_widen=1.0),
+    "pilot-uni": MultiConfig(**BASE),
 }
 QUANTS = ["price", "delta", "gamma", "vega", "volga", "vanna"]
 

@@ -7,9 +7,16 @@ Monte Carlo (LSM) with **initial state dispersion (ISD)**, a **value-function
 step at t = 1**, and the proposed **2-step method** that rescales the ISD to
 an estimated optimal size α\*.
 
-The code implements the paper's method **as printed**. Where the paper leaves
-a detail open, the choice is listed under [Choices](#choices-the-paper-leaves-open).
-No rule that is not in the paper is used to produce the main results.
+The code implements the paper's method as printed. Where the paper leaves a
+detail open, the choice is listed under [Choices](#choices-the-paper-leaves-open);
+the most important one is the order M in the α\* selector, see
+[The selector order M](#the-selector-order-m). No rule that is not in the
+paper is used to produce the replication results.
+
+The [second part](#beyond-the-paper-labels-for-a-neural-network-surrogate) extends the method to
+the Greeks with respect to σ, r and d, to generate training labels
+(price, Δ, Γ, Θ, Vega, Volga, Vanna, Rho, dividend Rho) for a neural-network
+surrogate. It is not part of the paper.
 
 Not replicated, on purpose: the binomial benchmark values (and Figure 1, which
 is binomial-based) and the competing methods of Table 10 (PDM, LRM, MLSM).
@@ -24,13 +31,13 @@ settings as Table 5's σ = 20 %, T = 1 rows.
 | `simgreeks/core.py` | ISD (eq. 23, 25), GBM paths, LSM with naive and value-function payoffs, t = 0 regression (eq. 22) |
 | `simgreeks/selector.py` | Optimal α\* selector, Appendix A.2: ROT pilot (A.2)–(A.3), local fit, plug-in (A.1) |
 | `simgreeks/methods.py` | One replication of NAIVE, NAIVE-VF, TRUNC-VF and 2STEP-VF; the 2-step second step; the α\* rule |
-| `simgreeks/reference.py` | Reference PDE pricer (Crank–Nicolson) for validation: price, Δ, Γ, Θ (not part of the paper) |
+| `simgreeks/reference.py` | Reference PDE pricer (Crank–Nicolson) for validation: price, Δ, Γ, Θ and bumped σ, r, d Greeks (not part of the paper) |
 | `simgreeks/runner.py`, `report.py` | Parallel replications; paper-style tables with † flags |
 | `experiments/run.py` | All experiments of Sections 3 and 4.1–4.3, plus the fixed-α\* diagnostic |
-| `experiments/diagnostics/` | Diagnostics of the α\* selector (see below) |
+| `experiments/diagnostics/` | Diagnostics of the α\* selector's M = M0 reading (see below) and of the multivariate design |
 | `experiments/theta_check.py` | Simulated Θ vs the reference pricer's finite-difference Θ |
-| `simgreeks/multi.py` | Vega, Rho, dividend Rho, Vanna by multivariate ISD (not part of the paper) |
-| `experiments/multi_check.py` | Multivariate Greeks vs closed form (European) and the reference (American) |
+| `simgreeks/multi.py` | Label generator: price and Δ, Γ, Θ, Vega, Volga, Vanna, Rho, dividend Rho by multivariate ISD (not part of the paper) |
+| `experiments/multi_check.py` | Labels vs closed form (European) and the reference pricer (American); resumable |
 | `data/paper_tables.csv` | Tables 1–9 of the paper (BM, estimates, std devs, † flags) |
 | `results/` | Output tables (`*.md`), figures, per-replication estimates (`raw/`), diagnostics |
 
@@ -42,7 +49,8 @@ python experiments/run.py all --reps 100            # Figs 2-3, Tables 1-9 (≈ 
 python experiments/run.py fixed_alpha --reps 100    # fixed-alpha* diagnostic (≈ 15 min)
 python experiments/run.py table5_heuristic          # placeholder alpha* on Table 5 (≈ 4 min on 8 cores)
 python experiments/theta_check.py                   # Theta vs reference pricer (≈ 5 min on 8 cores)
-python experiments/multi_check.py european american timing   # multivariate Greeks (≈ 40 min, 8 GB RAM)
+python experiments/multi_check.py american european timing   # labels (≈ 2.5 h on 4 cores; resumes if interrupted)
+python experiments/diagnostics/multi_design_check.py          # exercise rule and σ design of the labels
 python experiments/diagnostics/table9_selector_trace.py
 python experiments/diagnostics/beta_scaling.py
 python experiments/diagnostics/synthetic_selector_check.py
@@ -55,59 +63,78 @@ year, N = 100,000 paths, Mτ = M0 = 9, 100 independent replications. A † marks
 
 ## Results (100 replications)
 
+Selector order M = ν + 1 (the default, see [below](#the-selector-order-m)).
+
 | Experiment | Output | Significant at 1 % (ours / paper) | Verdict |
 |---|---|---|---|
 | Fig. 2: t = 0 regression data | `figures/figure2.png` | – | Reproduced |
 | Table 1: naive | `section3_tables1-4.md` | 9 / 10 of 27 | Reproduced (α = 25 biases match to ~0.002) |
 | Table 2: value function | same | 10 / 13 | Close at α = 5 and 25; noisier Greeks at α = 0.5 |
-| Table 3: truncation | same | 10 / 3 | Bias at α = 25 only partly removed |
-| Table 4: 2-step | same | 4 / 2 | Matches at α = 5; residual bias at α = 25; very noisy Greeks at α = 0.5 |
-| Fig. 3: all methods across α | `figures/figure3.png` | – | Main message reproduced: only 2-step stays near the benchmark as α grows |
-| Table 5: 27 options | `table5.md` | 15 / 1 of 81 | σ = 20 % matches; misses concentrated at σ = 10 % |
-| Table 6: r and d | `table6.md` | 3 / 0 of 27 | Small price biases |
-| Table 7: N and M0 | `table7.md` | 4 / 15 of 81 | Same pattern: M0 = 5 and small N are worst |
-| Table 8: Mτ | `table8.md` | 5 / 0 of 27 | Little effect of Mτ, as in the paper |
-| Table 9: ISD kernel, α\* target | `table9.md` | 0 / 0 of 45 | Estimates fine, but the paper's effects of kernel and target are much weaker |
+| Table 3: truncation | same | 10 / 3 | Bias at α = 25 not removed (see gaps) |
+| Table 4: 2-step | same | 2 / 2 | Reproduced at α = 5 and 25; very noisy Greeks at α = 0.5 |
+| Fig. 3: all methods across α | `figures/figure3.png` | – | Reproduced: only 2-step stays near the benchmark as α grows |
+| Table 5: 27 options | `table5.md` | 1 / 1 of 81 | Reproduced |
+| Table 6: r and d | `table6.md` | 4 / 0 of 27 | Small price biases |
+| Table 7: N and M0 | `table7.md` | 2 / 15 of 81 | Reproduced; fewer flags than the paper |
+| Table 8: Mτ | `table8.md` | 4 / 0 of 27 | Little effect of Mτ, as in the paper |
+| Table 9: ISD kernel, α\* target | `table9.md` | 0 / 0 of 45 | Effect of the target ν reproduced in direction; kernel effect absent |
 
-In total 60 of 369 estimates are flagged (paper: 44). The NAIVE and NAIVE-VF
-tables, which do not use α\*, match the paper. The differences in the other
-tables come from the α\* selector.
+In total 42 of 369 estimates are flagged (paper: 44).
 
-## The α\* selector: why the results differ
-
-The selector produces an α\* proportional to the initial ISD size α0, while the
-paper's standard deviations imply an α\* near 4–6 for any α0 ≥ 5:
+Mean α\* selected for the Gamma (Section 3 runs, K = 40):
 
 | initial α0 | 0.5 | 1 | 2.5 | 5 | 10 | 15 | 25 | 40 |
 |---|---|---|---|---|---|---|---|---|
-| mean α\* (Section 3 runs) | 0.28 | 0.58 | 1.5 | 3.1 | 6.2 | 9.3 | 12.9 | 14.3 |
+| mean α\* | 0.28 | 0.62 | 1.7 | 3.3 | 4.9 | 5.6 | 6.6 | 7.8 |
 
-A too-wide α\* (≈ 13 at α0 = 25) crosses the early-exercise boundary and biases
-the Greeks. A too-narrow one (≈ 0.3 at α0 = 0.5) makes them very noisy.
+For α0 ≥ 5 the selector settles near 4–7, which is where the fixed-α\*
+diagnostic (`fixed_alpha.md`) shows the 2-step method reproduces Table 4.
 
-The diagnostics in `results/diagnostics/` and `results/fixed_alpha.md` show why:
+### Remaining gaps
 
-1. **The rest of the method is right** (`fixed_alpha.md`). With α\* fixed at
-   4–6, the 2-step method reproduces the paper's Table 4: no estimate is flagged,
-   and the standard deviations are close to the paper's.
-2. **No implementation bug** (`diagnostics/synthetic`). On a known curve (the
-   Black-Scholes put) without noise, the selector recovers the true β₁₀ to within
-   1–7 %, and with tiny noise α\* matches the oracle α\*.
-3. **The curvature estimate is noise** (`diagnostics/beta_scaling`). On the real
-   value-function data the estimated β₁₀ scales as α0^−9.9 (noise in a window
-   ∝ α0 predicts −10), with a random sign up to α0 ≈ 10. Plugged into (A.1) this
-   forces α\* ∝ α0. The measured slope is 0.997.
-4. **The constants are not the cause** (`diagnostics/table9_trace`). The printed
-   constants and Fan & Gijbels' constants give the same proportional α\*. The
-   printed ones reproduce the *direction* of the paper's Table 9 (a smaller α\*
-   when optimising for the price) but not its size.
+- **α0 = 0.5.** The pilot ISD is too narrow to estimate curvature; α\* ≈ 0.3
+  and the 2-step Greeks are very noisy.
+- **Table 3 at α0 = 25.** TRUNC-VF stays biased (price ≈ 0.890 vs 0.917): the
+  truncated paths keep the value function fitted on the wide pilot ISD.
+- **Table 9, ISD kernel.** The paper's lower variance with the uniform ISD
+  does not appear.
+- **Selection bias of the 2-step Gamma.** α\* is chosen on the same paths the
+  Greeks are estimated from, so it is smallest when the noise makes the data look
+  curved, which is when the Gamma estimate has that noise. Pooled over Tables 5–9
+  (500 replications per strike, same option), the Gamma is biased by +2.6 % at
+  K = 44 (t = 3.1), −1.6 % at K = 40 and −1.1 % at K = 36; in the quarter of
+  replications with the smallest α\* the K = 44 bias is +12 %. The paper's
+  estimates show about +1 % at K = 44.
+- **Table 9, ν = 0.** α\* ≈ 0.34 is much smaller than the paper's results
+  imply; Greek standard deviations are about 10× the paper's.
 
-In short, with N = 100,000 the (M0 + 1)-th derivative that (A.1) needs cannot be
-estimated from the data, so the selector as described cannot produce the stable
-α\* the paper's results imply. The paper does not report its α\* values, and the
-implementation details that would explain the difference are not in the paper.
+## The selector order M
 
-## Beyond the paper: α\* rule, Theta, reference pricer
+Appendix A.2 uses a polynomial order M in (A.1)–(A.3) but does not define it.
+The paper does **not** say M = ν + 1; this is our interpretation.
+
+- **M = M0 = 9** (`AlgoConfig(selector_order="M0")`). (A.1) then needs the
+  10th derivative of the price. With N = 100,000 that estimate is simulation
+  noise: β̂₁₀ scales as α0^−9.9, which forces α\* ∝ α0 (measured slope 0.997).
+  The selector then returns α\* ≈ 13 at α0 = 25, and the results differ from
+  the paper (60 flags, 15 in Table 5 alone).
+- **M = ν + 1** (default). This is the standard local-polynomial order for the
+  ν-th derivative in Fan & Gijbels (1996). (A.1) then needs the (ν + 2)-th
+  derivative, which the data can identify. It is used only in the selector; the
+  t = 0 regression keeps order M0.
+
+The diagnostics in `experiments/diagnostics/` and `results/diagnostics/` use
+the M0 reading on purpose; they document why it fails:
+
+1. `fixed_alpha.md`: with α\* fixed at 4–6, the 2-step method reproduces
+   Table 4, so the rest of the method is right.
+2. `diagnostics/synthetic`: on a known noiseless curve the selector recovers
+   β₁₀, so there is no implementation bug.
+3. `diagnostics/beta_scaling`: on the real data β̂₁₀ is noise.
+4. `diagnostics/table9_trace`: the printed constants and Fan & Gijbels'
+   constants give the same proportional α\* under the M0 reading.
+
+## Beyond the paper: labels for a neural-network surrogate
 
 Everything in this section is **not part of the paper**. It is used for the
 label-generation work and does not change the replication results above.
@@ -116,18 +143,13 @@ label-generation work and does not change the replication results above.
 
 | Rule | α\* | Status |
 |---|---|---|
-| `"selector"` (**default**) | Appendix A.2 selector, `simgreeks/selector.py` | The paper's method as printed; produces α\* ∝ α0 (see above) |
+| `"selector"` (**default**) | Appendix A.2 selector, `simgreeks/selector.py`, order `selector_order` | The paper's method; reproduces Table 5 with M = ν + 1 (above) |
 | `"fixed"` | `alpha_star_fixed` | Diagnostics |
-| `"heuristic"` | `alpha_star_c · S0 · σ · √T` (c = 0.6 by default), capped at 0.75 S0 | **TEMPORARY PLACEHOLDER, not from the paper.** Stands in for the selector until it is fixed |
+| `"heuristic"` | `alpha_star_c · S0 · σ · √T` (c = 0.6 by default), capped at 0.75 S0 | Placeholder from before the selector was fixed; kept for the diagnostics below |
 
-The default stays `"selector"` so that `experiments/run.py` keeps reproducing
-the paper as printed; the heuristic must be requested explicitly. With c = 0.6,
-α\* = 4.8 for S0 = 40, σ = 20 %, T = 1, inside the 4–6 range where the fixed-α\*
-diagnostic reproduces Table 4.
-
-Check on the Table 5 grid (`results/table5_heuristic.md`, 100 replications,
-α0 = 10): **4 of 81** estimates differ from the benchmark at 1 % (paper: 1;
-selector as printed: 15):
+Check of the heuristic on the Table 5 grid (`results/table5_heuristic.md`, 100
+replications, α0 = 10): **4 of 81** estimates differ from the benchmark at 1 %
+(paper: 1; selector with M = M0: 15; selector with M = ν + 1: 1):
 
 | T | σ | K | α\* | Flagged |
 |---|---|---|---|---|
@@ -135,8 +157,7 @@ selector as printed: 15):
 | 2 | 40 % | 36 | 13.6 | Price +0.0084 (t = 3.5), Gamma −0.0009 (t = −2.8, −5 %) |
 | 2 | 40 % | 44 | 13.6 | Price +0.0096 (t = 2.6) |
 
-The σ = 10 % cells that the selector got wrong are now unbiased. But the
-heuristic's scaling in σ√T is too steep compared with the paper's implied α\*:
+The heuristic's scaling in σ√T is too steep compared with the selector's α\*:
 - at σ√T = 0.07 (α\* = 1.7) the Gamma standard deviations are 2–3× the paper's;
 - at σ√T = 0.57 (α\* = 13.6) the price is biased and the Gamma standard
   deviations are 2–3× smaller than the paper's.
@@ -162,65 +183,70 @@ replication its sd is 25–50 % of |Θ| at σ = 20 %. In the exercise region
 
 Crank–Nicolson in ln S with Rannacher smoothing, on the same exercise grid as
 the LSM (no exercise at t0), plus American and European variants. Θ is a
-central difference in calendar time across t0. Accuracy:
+central difference in calendar time across t0. `put_fd_greeks` adds Vega,
+Volga, Rho, dividend Rho, Vanna, ∂Δ/∂r, ∂Δ/∂d and Vera by bumping σ, r and d
+on the same x-grid, with Richardson extrapolation. Accuracy:
 - European: matches the closed form to 1e-5 in price, Δ, Γ and Θ;
 - Bermudan: matches the paper's binomial benchmarks on all 36 Table 5–6 options
   to ≤ 1.3e-4, the level of the benchmarks' 4-decimal rounding;
 - halving the grid steps changes every output by < 3e-4;
-- about 0.1 s per option.
+- bumped Greeks: match the European closed forms to 1e-3; the Bermudan Volga
+  moves by up to 0.3 under grid refinement at the money (Volga ≈ 5.7 there);
+- about 0.1 s per option, about 3 s with all bumped Greeks.
 
-### Vega, Rho, dividend Rho, Vanna: multivariate ISD (`simgreeks/multi.py`)
+### Multivariate Greeks: the label generator (`simgreeks/multi.py`)
 
-Work in progress. Each label combines three independent runs that disperse
-(S, σ), (S, r) and (S, d), with 100,000 paths each:
-- every path keeps its own σ, r, d for its whole life,
-  S(t) = S0 exp((r − d − σ²/2) t + σ W(t)), and is discounted with its own r;
-- the LSM regressions use a basis in S and the dispersed parameter;
-- the t = 0 regression is a multivariate Taylor polynomial in
-  (S − S0, θ − θ0), and each Greek is a coefficient times a!/h^a;
-- a European control variate is on by default: only the early-exercise
-  premium is regressed, and the closed-form European Greeks are added back;
-- price, Δ and Γ are averaged over the three runs, and Θ comes from the PDE
-  identity.
+One call gives one label:
 
-Dispersion sizes are placeholders: α_S = 0.6 S0 σ √T, α_σ = 0.25 σ,
-α_r = α_d = 0.02. A single joint 4-D run was tried first. It was noisier and
-biased Vega for in-the-money options (−9 % at K = 44), so it was replaced by
-the three 2-D runs.
+```python
+from simgreeks.core import PutSpec
+from simgreeks.multi import MultiConfig, label
+label(PutSpec(S0=40, K=40, sigma=0.2, r=0.06, d=0.0, T=1.0), MultiConfig(), seed=1)
+# -> price, delta, gamma, theta, vega, volga, vanna, rho, rho_d (dividend Rho),
+#    delta_r, delta_d, ex_region, alpha_S, alpha_sigma, alpha_r, alpha_d
+```
 
-Checks (`experiments/multi_check.py`, 100 replications per option):
-- **European**, no early exercise, no control variate, 6 options: 0 of 66
-  Greek estimates biased.
-- **American**, 33 options (the Table 5 grid plus Table 6's (r, d)), against
-  the reference with σ, r, d bumped:
+The paper's method is extended from S to σ, r and d: each path starts from its
+own (S_n, σ_n, r_n, d_n) and keeps its parameters for its whole life,
+S_n(t) = S_n exp((r_n − d_n − σ_n²/2) t + σ_n W_n(t)), discounted with its own
+r_n. The parameters are part of the state, so the LSM regressions use a basis
+in S and the dispersed parameters, and the t = 0 regression is a multivariate
+Taylor polynomial in (S − S0, σ − σ0, r − r0, d − d0): the coefficient c of
+x_S^i x_σ^a x_r^b x_d^e gives ∂^(i+a+b+e)P / ∂S^i ∂σ^a ∂r^b ∂d^e = i! a! b! e! c.
 
-| Greek | biased options | median bias | noise of one label |
-|---|---|---|---|
-| Vega | 0 / 33 | 0.3 % | 6 % |
-| Rho, dividend Rho | 2–3 / 33 | 2 % | 18–22 % |
-| Vanna | 2 / 33 | 6 % | 77 % |
-| ∂Δ/∂r, ∂Δ/∂d | 1–2 / 33 | 10–17 % | ≈ 190 % |
-| Θ | 1 / 33 | 1.7 % | 16 % |
-| Γ | 4 / 33 | 0.8 % | 8 % |
-| Δ | 7 / 33 | 0.1 % | 1 % |
-| Price | 15 / 33 | 0.1 % | < 1 % |
-| Volga | 21 / 33 | 51 % | – (not usable) |
+A label combines three independent runs, (S, σ), (S, r) and (S, d), each in
+two phases on independent paths:
 
-Open issues:
-- **Price biases** of +0.005 to +0.014 at r = d = 0. They appear in every run,
-  and also in the 1-D method; the paper reports the same case in Table 6. A
-  simpler exercise rule (`MultiConfig(weight=9)`) is not a fix
-  (`results/diagnostics/exercise_basis/summary.md`). It removes the bias only
-  in the (S, σ) run; the (S, r) and (S, d) runs stay biased, which suggests a
-  kink at r = 0. It also biases Vega and the control options, so weight 3
-  stays the default. Untested candidate: an exercise rule fitted on an
-  independent set of paths, which removes in-sample bias.
-- **Exercise region** (K = 44, σ = 10 %): the windows straddle the exercise
-  boundary, which biases Γ and Vanna. `american_t0=True` reports American
-  values there instead (still to decide).
-- **Runtime:** about 0.6 / 1.1 / 2.0 s per label at T = 0.5 / 1 / 2 on one
-  core, and about 300 MB per worker. With 8 workers on an 8 GB machine the
-  American check swapped and took 40 min.
+1. **Pilot** (100,000 paths). S and σ are dispersed widely (α0_S = 0.25 S0, the
+   paper's α = 10 at S0 = 40; α0_σ = 0.6 σ), r or d by 1.3 × 0.02. The paper's
+   selector (M = ν + 1) on the pilot's partial residuals chooses α_S\*
+   (target: Gamma) and α_σ\* (target: Volga). The pilot's starting points are
+   then rescaled to the chosen widths, as in the paper's 2-step method (exact,
+   since paths are rebuilt from W), and the exercise rule is fitted on them.
+2. **Main** (100,000 paths) at the chosen widths: LSM with the pilot's exercise
+   rule at every date including t1, a European control variate (only the
+   early-exercise premium is regressed; the closed-form European Greeks are
+   added back), the value-function label, and the t = 0 Taylor regression.
+
+Price, Δ and Γ are averaged over the three runs; Vega, Volga and Vanna come from
+the (S, σ) run, Rho from (S, r), dividend Rho from (S, d); Θ follows from the
+PDE identity. When exercising at t0 is optimal (the estimated continuation
+value is at or below K − S0), the label is exact: price K − S0, Δ = −1, all
+other Greeks 0. Vera (∂²P/∂σ∂r) is available by adding the group (S, σ, r),
+at about 40 % more time per label.
+
+Each design choice fixes a bias found in the checks:
+
+| Choice | Bias it removes | Evidence |
+|---|---|---|
+| Exercise rule fitted on independent (pilot) paths | An in-sample rule has foresight, largest where the regression's leverage is largest (the edges of the parameter box): Volga +50 % median, 21 of 33 options flagged | `results/multi_check_american_v1.md`; `experiments/diagnostics/multi_design_check.py` |
+| Uniform dispersion of σ, r, d; pilot box 1.3× wider | The parameters do not diffuse, so the Epanechnikov density, which vanishes at the edges, leaves the rule poorly fitted there | same diagnostic |
+| Widths chosen on the pilot paths | Choosing α\* on the paths that give the Greeks biases them (+2.6 % Gamma at K = 44 in the paper's method, see above) | pooled Tables 5–9 |
+| Widths from the selector instead of fixed formulas | Fixed α_S = 0.6 S0 σ √T: Gamma −4.4 % and Theta +54 % at σ = 10 %, T = 2 | quick checks |
+| Rule refitted on the rescaled pilot | A rule fitted on the wide pilot is poor where the main paths are: price −0.4 % at σ = 10 % | quick checks |
+| Exercise at t1 by the rule, not max(Z, Ĉ) | The max turns the fit's estimation error into an upward bias, convex in σ: Volga +34 % at K = 44, σ = 20 %, T = 1 (−> +1 %) | quick checks |
+
+VALIDATION_SECTION
 
 ## Choices the paper leaves open
 
@@ -234,8 +260,10 @@ the global pilot of order M + 3 "using all data"; w0 "the indicator function";
 - The local fit has order M + 1, the lowest order that identifies β_{M+1}. It
   is unweighted within |X − x0| ≤ h_ROT. The paper recommends "a weighted
   regression" but gives no weights.
-- h_ROT is not clipped. For ν = 1 the printed (A.3) integral is zero, so h_ROT
-  is infinite and the local fit uses all data.
+- The order M in (A.1)–(A.3) is ν + 1 by default (see
+  [The selector order M](#the-selector-order-m)).
+- h_ROT is not clipped. For ν = 1 and M = M0 = 9 the printed (A.3) integral is
+  zero, so h_ROT is infinite and the local fit uses all data.
 - α\* is capped at 0.75 S0, only to keep rescaled prices positive. The cap
   never binds in the reported runs.
 - `AlgoConfig(selector_reading="fg")` uses Fan & Gijbels' constants instead of

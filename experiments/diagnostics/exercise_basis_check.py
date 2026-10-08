@@ -41,7 +41,8 @@ from simgreeks.runner import run_configs  # noqa: E402
 Q = ["price", "delta", "gamma", "vega", "rho", "rho_d", "vanna"]
 OUT = ROOT / "results" / "diagnostics" / "exercise_basis"
 OLD = dict(exercise_rule="insample", param_kernel="epanechnikov",
-           groups=(("S", "sigma"), ("S", "r"), ("S", "d")))
+           groups=(("S", "sigma"), ("S", "r"), ("S", "d")),
+           widths="fixed", vf_rule="max", american_t0=False)
 
 
 def main():
