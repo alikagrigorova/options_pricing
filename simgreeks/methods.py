@@ -58,7 +58,26 @@ class AlgoConfig:
     second_step: str = "refit_t1"  # see SECOND_STEP_MODES
     alpha_star_fixed: float | None = None  # bypass the selector (diagnostics)
     selector_reading: str = "literal"      # "literal" (paper) or "fg" (Fan & Gijbels)
+    selector_order: str = "nu+1"           # M in (A.1)-(A.3): "nu+1" or "M0" (see below)
     methods: tuple = field(default=METHODS)
+
+
+def selector_order(cfg: "AlgoConfig", M0: int, nu: int) -> int:
+    """Polynomial order M used in the selector's formulas (A.1)-(A.3).
+
+    The paper does not define this M in Appendix A.2. "M0" reads it as the order
+    of the t = 0 regression (M0 = 9), which makes (A.1) need the 10th derivative
+    of the price: that estimate is pure simulation noise and alpha* ends up
+    proportional to the initial ISD size. "nu+1" (default) uses the local order
+    nu + 1 for the nu-th derivative, the standard choice in Fan & Gijbels, so
+    (A.1) needs the (nu+2)-th derivative, which the data can identify. This is
+    our interpretation; it reproduces the paper's results.
+    """
+    if cfg.selector_order == "nu+1":
+        return nu + 1
+    if cfg.selector_order == "M0":
+        return M0
+    raise ValueError(f"unknown selector_order {cfg.selector_order!r}")
 
 
 def run_once(spec: PutSpec, cfg: AlgoConfig, seed, M0_list=None, nu_list=None):
@@ -92,7 +111,8 @@ def run_once(spec: PutSpec, cfg: AlgoConfig, seed, M0_list=None, nu_list=None):
                 a_star = cfg.alpha_star_fixed
             else:
                 a_star = select_alpha(X, res.Y_vf, x0, cfg.alpha, cfg.isd_kernel,
-                                      M0, nu, cfg.selector_reading)["alpha_star"]
+                                      selector_order(cfg, M0, nu), nu,
+                                      cfg.selector_reading)["alpha_star"]
             if "TRUNC-VF" in cfg.methods:
                 m = np.abs(X - x0) <= a_star
                 if m.sum() < 5 * (M0 + 1):

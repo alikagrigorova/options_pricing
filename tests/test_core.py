@@ -50,3 +50,9 @@ def test_selector_recovers_known_curvature_without_noise():
     Y = 1.0 + 0.5 * (X - 40) + 1e-12 * (X - 40) ** 10
     r = select_alpha(X, Y, 40.0, 10.0, "epanechnikov", 9, 2, "literal")
     assert np.isclose(r["beta_q"], 1e-12, rtol=1e-3)
+
+
+def test_selector_order_option():
+    from simgreeks.methods import AlgoConfig, selector_order
+    assert selector_order(AlgoConfig(), 9, 2) == 3          # default: nu + 1
+    assert selector_order(AlgoConfig(selector_order="M0"), 9, 2) == 9

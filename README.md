@@ -48,57 +48,69 @@ year, N = 100,000 paths, Mτ = M0 = 9, 100 independent replications. A † marks
 
 ## Results (100 replications)
 
+Selector order M = ν + 1 (the default, see [below](#the-selector-order-m)).
+
 | Experiment | Output | Significant at 1 % (ours / paper) | Verdict |
 |---|---|---|---|
 | Fig. 2: t = 0 regression data | `figures/figure2.png` | – | Reproduced |
 | Table 1: naive | `section3_tables1-4.md` | 9 / 10 of 27 | Reproduced (α = 25 biases match to ~0.002) |
 | Table 2: value function | same | 10 / 13 | Close at α = 5 and 25; noisier Greeks at α = 0.5 |
-| Table 3: truncation | same | 10 / 3 | Bias at α = 25 only partly removed |
-| Table 4: 2-step | same | 4 / 2 | Matches at α = 5; residual bias at α = 25; very noisy Greeks at α = 0.5 |
-| Fig. 3: all methods across α | `figures/figure3.png` | – | Main message reproduced: only 2-step stays near the benchmark as α grows |
-| Table 5: 27 options | `table5.md` | 15 / 1 of 81 | σ = 20 % matches; misses concentrated at σ = 10 % |
-| Table 6: r and d | `table6.md` | 3 / 0 of 27 | Small price biases |
-| Table 7: N and M0 | `table7.md` | 4 / 15 of 81 | Same pattern: M0 = 5 and small N are worst |
-| Table 8: Mτ | `table8.md` | 5 / 0 of 27 | Little effect of Mτ, as in the paper |
-| Table 9: ISD kernel, α\* target | `table9.md` | 0 / 0 of 45 | Estimates fine, but the paper's effects of kernel and target are much weaker |
+| Table 3: truncation | same | 10 / 3 | Bias at α = 25 not removed (see gaps) |
+| Table 4: 2-step | same | 2 / 2 | Reproduced at α = 5 and 25; very noisy Greeks at α = 0.5 |
+| Fig. 3: all methods across α | `figures/figure3.png` | – | Reproduced: only 2-step stays near the benchmark as α grows |
+| Table 5: 27 options | `table5.md` | 1 / 1 of 81 | Reproduced |
+| Table 6: r and d | `table6.md` | 4 / 0 of 27 | Small price biases |
+| Table 7: N and M0 | `table7.md` | 2 / 15 of 81 | Reproduced; fewer flags than the paper |
+| Table 8: Mτ | `table8.md` | 4 / 0 of 27 | Little effect of Mτ, as in the paper |
+| Table 9: ISD kernel, α\* target | `table9.md` | 0 / 0 of 45 | Effect of the target ν reproduced in direction; kernel effect absent |
 
-In total 60 of 369 estimates are flagged (paper: 44). The NAIVE and NAIVE-VF
-tables, which do not use α\*, match the paper. The differences in the other
-tables come from the α\* selector.
+In total 42 of 369 estimates are flagged (paper: 44).
 
-## The α\* selector: why the results differ
-
-The selector produces an α\* proportional to the initial ISD size α0, while the
-paper's standard deviations imply an α\* near 4–6 for any α0 ≥ 5:
+Mean α\* selected for the Gamma (Section 3 runs, K = 40):
 
 | initial α0 | 0.5 | 1 | 2.5 | 5 | 10 | 15 | 25 | 40 |
 |---|---|---|---|---|---|---|---|---|
-| mean α\* (Section 3 runs) | 0.28 | 0.58 | 1.5 | 3.1 | 6.2 | 9.3 | 12.9 | 14.3 |
+| mean α\* | 0.28 | 0.62 | 1.7 | 3.3 | 4.9 | 5.6 | 6.6 | 7.8 |
 
-A too-wide α\* (≈ 13 at α0 = 25) crosses the early-exercise boundary and biases
-the Greeks. A too-narrow one (≈ 0.3 at α0 = 0.5) makes them very noisy.
+For α0 ≥ 5 the selector settles near 4–7, which is where the fixed-α\*
+diagnostic (`fixed_alpha.md`) shows the 2-step method reproduces Table 4.
 
-The diagnostics in `results/diagnostics/` and `results/fixed_alpha.md` show why:
+### Remaining gaps
 
-1. **The rest of the method is right** (`fixed_alpha.md`). With α\* fixed at
-   4–6, the 2-step method reproduces the paper's Table 4: no estimate is flagged,
-   and the standard deviations are close to the paper's.
-2. **No implementation bug** (`diagnostics/synthetic`). On a known curve (the
-   Black-Scholes put) without noise, the selector recovers the true β₁₀ to within
-   1–7 %, and with tiny noise α\* matches the oracle α\*.
-3. **The curvature estimate is noise** (`diagnostics/beta_scaling`). On the real
-   value-function data the estimated β₁₀ scales as α0^−9.9 (noise in a window
-   ∝ α0 predicts −10), with a random sign up to α0 ≈ 10. Plugged into (A.1) this
-   forces α\* ∝ α0. The measured slope is 0.997.
-4. **The constants are not the cause** (`diagnostics/table9_trace`). The printed
-   constants and Fan & Gijbels' constants give the same proportional α\*. The
-   printed ones reproduce the *direction* of the paper's Table 9 (a smaller α\*
-   when optimising for the price) but not its size.
+- **α0 = 0.5.** The pilot ISD is too narrow to estimate curvature; α\* ≈ 0.3
+  and the 2-step Greeks are very noisy.
+- **Table 3 at α0 = 25.** TRUNC-VF stays biased (price ≈ 0.890 vs 0.917): the
+  truncated paths keep the value function fitted on the wide pilot ISD.
+- **Table 9, ISD kernel.** The paper's lower variance with the uniform ISD
+  does not appear.
+- **Table 9, ν = 0.** α\* ≈ 0.34 is much smaller than the paper's results
+  imply; Greek standard deviations are about 10× the paper's.
 
-In short, with N = 100,000 the (M0 + 1)-th derivative that (A.1) needs cannot be
-estimated from the data, so the selector as described cannot produce the stable
-α\* the paper's results imply. The paper does not report its α\* values, and the
-implementation details that would explain the difference are not in the paper.
+## The selector order M
+
+Appendix A.2 uses a polynomial order M in (A.1)–(A.3) but does not define it.
+The paper does **not** say M = ν + 1; this is our interpretation.
+
+- **M = M0 = 9** (`AlgoConfig(selector_order="M0")`). (A.1) then needs the
+  10th derivative of the price. With N = 100,000 that estimate is simulation
+  noise: β̂₁₀ scales as α0^−9.9, which forces α\* ∝ α0 (measured slope 0.997).
+  The selector then returns α\* ≈ 13 at α0 = 25, and the results differ from
+  the paper (60 flags, 15 in Table 5 alone).
+- **M = ν + 1** (default). This is the standard local-polynomial order for the
+  ν-th derivative in Fan & Gijbels (1996). (A.1) then needs the (ν + 2)-th
+  derivative, which the data can identify. It is used only in the selector; the
+  t = 0 regression keeps order M0.
+
+The diagnostics in `experiments/diagnostics/` and `results/diagnostics/` use
+the M0 reading on purpose; they document why it fails:
+
+1. `fixed_alpha.md`: with α\* fixed at 4–6, the 2-step method reproduces
+   Table 4, so the rest of the method is right.
+2. `diagnostics/synthetic`: on a known noiseless curve the selector recovers
+   β₁₀, so there is no implementation bug.
+3. `diagnostics/beta_scaling`: on the real data β̂₁₀ is noise.
+4. `diagnostics/table9_trace`: the printed constants and Fan & Gijbels'
+   constants give the same proportional α\* under the M0 reading.
 
 ## Choices the paper leaves open
 
@@ -109,7 +121,8 @@ the global pilot of order M + 3 "using all data"; w0 "the indicator function";
 β_{M+1}"; (A.1); one pass; OLS as a uniform kernel (eq. 21). Our choices:
 - w0 is the indicator of |x − x0| ≤ 0.9 α0. The interval is not given, and
   ∫w0/f is infinite if w0 covers the whole Epanechnikov support.
-- The local fit has order M + 1, the lowest order that identifies β_{M+1}. It
+- M = ν + 1 (see above). The local fit has order M + 1, the lowest order that
+  identifies β_{M+1}. It
   is unweighted within |X − x0| ≤ h_ROT. The paper recommends "a weighted
   regression" but gives no weights.
 - h_ROT is not clipped. For ν = 1 the printed (A.3) integral is zero, so h_ROT
