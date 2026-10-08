@@ -1,8 +1,8 @@
-"""Diagnostic: exercise rule, parameter design and run groups of the
-multivariate ISD (simgreeks.multi, not part of the paper).
+"""Diagnostic: exercise rule and parameter design of the multivariate ISD
+(simgreeks.multi, not part of the paper).
 
 The first American check showed Volga biased upwards on 21 of 33 options
-(+50 % median). Part A locates the cause on the (S, sigma) run alone:
+(+50 % median). This locates the cause on the (S, sigma) run alone:
 
   insample-epa : exercise rule fitted on the same paths, Epanechnikov sigma
                  design (the previous default)
@@ -10,13 +10,6 @@ The first American check showed Volga biased upwards on 21 of 33 options
   pilot-epa    : rule fitted on independent pilot paths, Epanechnikov, same box
   pilot-uni    : independent pilot paths, uniform design, pilot box 1.3x wider
                  (the current default)
-
-Part B compares groupings of the dispersed coordinates (current default rule
-and design). Vera needs sigma and r in the same run:
-
-  D4 : (S, sigma), (S, r), (S, d), (S, sigma, r)   (the current default)
-  D2 : (S, sigma, r), (S, d)
-  D1 : (S, sigma, r, d)
 
 Seven options; references from reference.put_fd_greeks.
 
@@ -49,20 +42,14 @@ OUT = ROOT / "results" / "diagnostics" / "multi_design"
 SPECS = [PutSpec(K=36), PutSpec(K=40), PutSpec(K=44), PutSpec(K=36, sigma=0.1),
          PutSpec(K=40, sigma=0.4, T=0.5), PutSpec(K=40, r=0.0), PutSpec(K=44, d=0.06)]
 S_SIGMA = (("S", "sigma"),)
-PART_A = {
+VARIANTS = {
     "insample-epa": MultiConfig(groups=S_SIGMA, exercise_rule="insample",
                                 param_kernel="epanechnikov"),
     "insample-uni": MultiConfig(groups=S_SIGMA, exercise_rule="insample"),
     "pilot-epa": MultiConfig(groups=S_SIGMA, param_kernel="epanechnikov", pilot_widen=1.0),
     "pilot-uni": MultiConfig(groups=S_SIGMA),
 }
-PART_B = {
-    "D4": MultiConfig(),
-    "D2": MultiConfig(groups=(("S", "sigma", "r"), ("S", "d"))),
-    "D1": MultiConfig(groups=(("S", "sigma", "r", "d"),)),
-}
-Q_A = ["price", "delta", "gamma", "vega", "volga", "vanna"]
-Q_B = Q_A + ["rho", "rho_d", "vera"]
+QUANTS = ["price", "delta", "gamma", "vega", "volga", "vanna"]
 
 
 def timed_label(spec, cfg, seed):
@@ -122,21 +109,18 @@ def main():
     ap.add_argument("--workers", type=int, default=None)
     ap.add_argument("--N", type=int, default=100_000, help="paths per run")
     args = ap.parse_args()
-    variants = {v: replace(c, N=args.N) for v, c in {**PART_A, **PART_B}.items()}
+    variants = {v: replace(c, N=args.N) for v, c in VARIANTS.items()}
     configs = [dict(spec=s, cfg=c, fn=timed_label, tags=dict(i=i, variant=v))
                for i, s in enumerate(SPECS) for v, c in variants.items()]
     df = run_configs(configs, args.reps, base_seed=7003, workers=args.workers)
     OUT.mkdir(parents=True, exist_ok=True)
     df.to_csv(OUT / "raw.csv", index=False)
     refs = [put_fd_greeks(s) for s in SPECS]
-    lines = ["# Multivariate ISD: exercise rule, parameter design and run groups\n",
+    lines = ["# Multivariate ISD: exercise rule and σ design, (S, σ) run\n",
              f"{args.reps} replications per option and variant, {args.N:,} paths per run "
              "(and per pilot); references from "
-             "reference.put_fd_greeks. See the script's docstring for the variants.\n",
-             "## A. Exercise rule and σ design, (S, σ) run only\n"]
-    lines += tables(summarise(df, PART_A, Q_A, refs), df, PART_A, Q_A)
-    lines += ["", "## B. Run groups (pilot rule, uniform design)\n"]
-    lines += tables(summarise(df, PART_B, Q_B, refs), df, PART_B, Q_B)
+             "reference.put_fd_greeks. See the script's docstring for the variants.\n"]
+    lines += tables(summarise(df, VARIANTS, QUANTS, refs), df, VARIANTS, QUANTS)
     (OUT / "summary.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
 

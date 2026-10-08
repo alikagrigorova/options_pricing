@@ -138,8 +138,12 @@ def test_multi_control_variate_is_exact_for_european():
     spec = PutSpec(K=42, sigma=0.3, T=0.5, d=0.02)
     out = label(spec, MultiConfig(N=20_000, style="european"), 1)
     bs = bs_put(spec)
-    for k in ("price", "delta", "gamma", "vega", "volga", "rho", "rho_d", "vanna", "vera"):
+    for k in ("price", "delta", "gamma", "vega", "volga", "rho", "rho_d", "vanna"):
         assert np.isclose(out[k], bs[k], rtol=1e-6, atol=1e-8), k
+    assert "vera" not in out                       # no default group has sigma and r
+    groups = (("S", "sigma", "r"),)
+    out = label(spec, MultiConfig(N=20_000, style="european", groups=groups), 1)
+    assert np.isclose(out["vera"], bs["vera"], rtol=1e-6, atol=1e-8)
 
 
 def test_multi_american_t0_flag():

@@ -38,7 +38,7 @@ RESULTS = ROOT / "results"
 GREEK_LETTERS = {"sigma": "σ"}
 KEYS = ["T", "sigma", "r", "d", "K"]
 QUANTS = ["price", "delta", "gamma", "theta", "vega", "volga", "rho", "rho_d", "vanna",
-          "vera", "delta_r", "delta_d"]
+          "delta_r", "delta_d"]
 
 
 def american_grid():

@@ -84,7 +84,9 @@ PARAMS = ("sigma", "r", "d")
 STYLES = ("bermudan", "european")
 EXERCISE_RULES = ("pilot", "insample")
 PARAM_KERNELS = ("uniform", "epanechnikov")
-GROUPS = (("S", "sigma"), ("S", "r"), ("S", "d"), ("S", "sigma", "r"))
+GROUPS = (("S", "sigma"), ("S", "r"), ("S", "d"))
+# Vera (d2P / dsigma dr) needs sigma and r in one run: add the group
+# ("S", "sigma", "r"), which takes about 40 % of the time of a 4-run label.
 
 # Greek name -> multi-index (i_S, a_sigma, a_r, a_d) of the t = 0 polynomial
 GREEKS = {
@@ -374,19 +376,21 @@ def run_group(spec: PutSpec, cfg: MultiConfig, dims, seed) -> dict:
 
 
 def label(spec: PutSpec, cfg: MultiConfig, seed) -> dict:
-    """One estimate of the price and all Greeks at z0: one independent run per
-    group; S-Greeks averaged over the runs; Theta from the PDE identity."""
+    """One estimate of the price and the Greeks at z0: one independent run per
+    group; S-Greeks averaged over the runs; Theta from the PDE identity. Greeks
+    no group identifies (Vera with the default groups) are left out."""
     ss = seed if isinstance(seed, np.random.SeedSequence) else np.random.SeedSequence(seed)
     runs = [run_group(spec, cfg, dims, child)
             for dims, child in zip(cfg.groups, ss.spawn(len(cfg.groups)))]
     out = {}
-    for name in GREEKS:
+    for name in GREEKS:                # only the Greeks some group identifies
         vals = [r[name] for r in runs if not np.isnan(r[name])]
-        out[name] = float(np.mean(vals)) if vals else np.nan
+        if vals:
+            out[name] = float(np.mean(vals))
     out["theta"], out["ex_region"] = theta_pde(spec, out["price"], out["delta"], out["gamma"])
     if cfg.american_t0 and out["ex_region"]:
         # exercising at t_0 is optimal: V = K - S, so only Delta is non-zero
-        out.update({k: 0.0 for k in OUTPUTS})
+        out.update({k: 0.0 for k in OUTPUTS if k in out})
         out["price"], out["delta"] = spec.K - spec.S0, -1.0
     alphas = {}
     for dims in cfg.groups:
