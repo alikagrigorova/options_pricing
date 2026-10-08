@@ -14,6 +14,11 @@ Result (results/diagnostics/exercise_basis/summary.md): weight 9 is NOT a fix.
 It only shrinks the r = 0 price bias (the (S, r) and (S, d) runs stay biased),
 and it biases Vega (t up to 11) and the price of the control options.
 
+It ran before the exercise rule was moved out of sample, so it pins the
+settings of that time (OLD below): in-sample rule, Epanechnikov parameter
+design, groups (S, sigma), (S, r), (S, d). The fix that was adopted is in
+multi_design_check.py.
+
     python experiments/diagnostics/exercise_basis_check.py [--reps 60] [--workers 6]
 """
 from __future__ import annotations
@@ -35,6 +40,8 @@ from simgreeks.runner import run_configs  # noqa: E402
 
 Q = ["price", "delta", "gamma", "vega", "rho", "rho_d", "vanna"]
 OUT = ROOT / "results" / "diagnostics" / "exercise_basis"
+OLD = dict(exercise_rule="insample", param_kernel="epanechnikov",
+           groups=(("S", "sigma"), ("S", "r"), ("S", "d")))
 
 
 def main():
@@ -47,7 +54,7 @@ def main():
             [PutSpec(K=K, d=0.06) for K in (36, 40, 44)] + \
             [PutSpec(K=36, sigma=0.4), PutSpec(K=40, sigma=0.4), PutSpec(K=44),
              PutSpec(K=36, sigma=0.1, T=0.5), PutSpec(K=40)]
-    cfgs = {"weight=3": MultiConfig(), "weight=9": MultiConfig(weight=9)}
+    cfgs = {"weight=3": MultiConfig(**OLD), "weight=9": MultiConfig(weight=9, **OLD)}
     configs = [dict(spec=s, cfg=c, fn=label, tags=dict(i=i, w=w))
                for i, s in enumerate(specs) for w, c in cfgs.items()]
     df = run_configs(configs, args.reps, workers=args.workers)
