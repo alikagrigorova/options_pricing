@@ -162,6 +162,14 @@ def table5_heuristic(reps, N):
             alpha_star_rule="heuristic", alpha_star_c=0.6)
 
 
+def table5_order(reps, N):
+    """Diagnostic: Table 5 with the selector's local order M = nu + 1 in
+    (A.1)-(A.3) instead of M0 (see methods.SELECTOR_ORDERS)."""
+    _table5(reps, N, "table5_order",
+            "Table 5 with the selector's local order M = nu + 1",
+            selector_order="nu+1")
+
+
 def _table5(reps, N, name, title, **cfg_kw):
     configs = []
     for T in (0.5, 1.0, 2.0):
@@ -308,7 +316,7 @@ def report_fixed_alpha(df):
 
 
 EXPERIMENTS = ["section3", "fig2", "table5", "table6", "table7", "table8", "table9"]
-DIAGNOSTICS = ["fixed_alpha", "table5_heuristic"]
+DIAGNOSTICS = ["fixed_alpha", "table5_heuristic", "table5_order"]
 
 
 def main():

@@ -27,6 +27,12 @@ METHODS = ("NAIVE", "NAIVE-VF", "TRUNC-VF", "2STEP-VF")
 #               the selector until the selector is fixed.
 ALPHA_STAR_RULES = ("selector", "fixed", "heuristic")
 
+# Order M of the local polynomial in the selector's formulas (A.1)-(A.3):
+#   M0   : the order of the t = 0 regression (M0 = 9), so (A.1) needs beta_{M0+1}
+#   nu+1 : the order Fan & Gijbels recommend for derivative nu (p - nu = 1), so
+#          (A.1) needs beta_{nu+2}, e.g. beta_4 for the Gamma
+SELECTOR_ORDERS = ("M0", "nu+1")
+
 # How the 2-step method treats the rescaled paths:
 #   refit_t1 : re-apply the pilot's stored in-the-money rules at t_{J-1}..t_2,
 #              refit the all-path t_1 regression, V = max(Z, C_new)  (default)
@@ -68,11 +74,14 @@ class AlgoConfig:
     alpha_star_fixed: float | None = None  # alpha* for alpha_star_rule="fixed"
     alpha_star_c: float = 0.6              # c for alpha_star_rule="heuristic" (placeholder)
     selector_reading: str = "literal"      # "literal" (paper) or "fg" (Fan & Gijbels)
+    selector_order: str = "M0"             # order M in (A.1)-(A.3): "M0" or "nu+1" (see SELECTOR_ORDERS)
     methods: tuple = field(default=METHODS)
 
     def __post_init__(self):
         if self.alpha_star_rule not in ALPHA_STAR_RULES:
             raise ValueError(f"unknown alpha_star_rule {self.alpha_star_rule!r}")
+        if self.selector_order not in SELECTOR_ORDERS:
+            raise ValueError(f"unknown selector_order {self.selector_order!r}")
         if (self.alpha_star_rule == "fixed") != (self.alpha_star_fixed is not None):
             raise ValueError("alpha_star_fixed must be set if and only if "
                              "alpha_star_rule='fixed'")
@@ -86,7 +95,8 @@ def alpha_star(spec: PutSpec, cfg: AlgoConfig, X, Y_vf, M0: int, nu: int) -> flo
         # Placeholder, not from the paper (see ALPHA_STAR_RULES).
         a = cfg.alpha_star_c * spec.S0 * spec.sigma * np.sqrt(spec.T)
         return float(min(a, ALPHA_CAP * spec.S0))
-    return select_alpha(X, Y_vf, spec.S0, cfg.alpha, cfg.isd_kernel, M0, nu,
+    M = M0 if cfg.selector_order == "M0" else nu + 1
+    return select_alpha(X, Y_vf, spec.S0, cfg.alpha, cfg.isd_kernel, M, nu,
                         cfg.selector_reading)["alpha_star"]
 
 
