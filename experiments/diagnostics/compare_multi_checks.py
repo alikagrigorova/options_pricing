@@ -7,7 +7,7 @@ Greek, over the options outside the exercise region, this reports
 
   noise ratio : sd of one label in variant B / sd in variant A (median over options)
   bias A, B   : median |mean - ref| / |ref|, and options flagged at 1 %
-  paired diff : mean of B - A in units of the reference, and options where the
+  paired diff : median over options of mean(B - A) / |ref|, and options where the
                 paired difference is significant at 1 %
 
 on the replications both runs have.
@@ -45,7 +45,7 @@ def compare(a: str, b: str) -> str:
              "with |ref| above 1 % of the largest |ref| for that Greek. Flagged: |t| > 2.576 "
              "(bias against the reference, or paired difference B − A).\n",
              f"| Greek | noise ratio {b}/{a} | bias {a} | flagged {a} | bias {b} | flagged {b} "
-             f"| mean paired diff ({b} − {a}) / ref | paired diffs flagged |",
+             f"| median paired diff ({b} − {a}) / ref | paired diffs flagged |",
              "|---|---|---|---|---|---|---|---|"]
     for q in QUANTS:
         rows = []
@@ -66,7 +66,7 @@ def compare(a: str, b: str) -> str:
         rel = lambda x: (x / big.ref.abs()).median()  # noqa: E731
         lines.append(f"| {q} | {big.ratio.median():.2f} | {rel(big.ba):.2%} | "
                      f"{int(t.fa.sum())} / {len(t)} | {rel(big.bb):.2%} | "
-                     f"{int(t.fb.sum())} / {len(t)} | {(big.d / big.ref.abs()).mean():+.2%} | "
+                     f"{int(t.fb.sum())} / {len(t)} | {(big.d / big.ref.abs()).median():+.2%} | "
                      f"{int(t.fd.sum())} / {len(t)} |")
     return "\n".join(lines) + "\n"
 

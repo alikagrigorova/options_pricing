@@ -304,6 +304,22 @@ Open issues:
   prices of Table 6 high (+0.1 to +0.2 %), where no early exercise is optimal
   and only the upward biases remain. Unbiased alternatives: the PDE price (this
   model only) or a duality upper bound (costly).
+  Two cheap fixes tried on the six options (paired, same seeds;
+  `price_bias_check.py --compare`, `results/diagnostics/price_bias/comparison.md`):
+  a European control variate in the exercise rule (regress Y_j − D_j, D_j the
+  discounted European payoff) **doubles** the shortfall, −0.23 % vs −0.12 %:
+  on the in-the-money paths the rule is fitted on, Y_j − D_j has 1.3–3× the
+  residual variance of Y_j (most are exercised soon, so Y_j and D_j are weakly
+  correlated); removed. N_pilot = 400,000 halves the rule's shortfall
+  (−0.19 % → −0.095 %, paired +0.095 ± 0.007 %) and moves the label's price
+  −0.12 % → −0.08 % (paired +0.04 ± 0.03 %, 25 reps), at 3.2× the CPU time.
+- **The t1 control variate** (default on) is worth keeping. Paired check
+  without it (`multi_check.py american --set control_variate=False`, 25 reps,
+  `results/multi_check_american_no_cv_vs_american.md`): one label's sd is
+  1.5–1.8× larger for price, Δ, Γ, Θ, Rho and Phi, 1.3× for Vanna, about
+  1.0–1.1× for Vega and Volga, i.e. 2.3–3.3× the labels for the same accuracy;
+  no systematic change in bias (at most 2 of 30 paired differences
+  flagged per Greek).
 - **Δ** inherits the price's lower bound. Over the 30 options outside the
   exercise region the price is low in all 30 and |Δ| too small in 28, and the
   relative biases of price and Δ have correlation 0.91: the rule's shortfall

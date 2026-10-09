@@ -42,8 +42,9 @@ curvature is Gamma.
    pilot only, so it has no foresight on the paths used for the answer.
 5. **Main run (100,000 fresh paths)** at the chosen width. Apply the rule.
    Only the early-exercise premium is estimated by simulation; the European
-   part is added back in closed form (control variate), which removes most
-   of the noise.
+   part is added back in closed form (control variate). Tested: without it
+   one label is 1.5–1.8× noisier in price, Δ, Γ, Θ, Rho and Phi (2.3–3.3×
+   the labels for the same accuracy), with no systematic change in bias.
 6. **Fit the curve at t = 0**. A polynomial in (stock, σ or r or d) around
    today's values. Its coefficients are the price and the Greeks.
 7. **Combine three such runs**: (S, σ) gives Vega, Volga, Vanna; (S, r)
@@ -128,10 +129,16 @@ one. For Γ the ratio is 0.07, negligible.
 
 **How to fix (in increasing cost):**
 
-1. **Better exercise rule**: more pilot paths (the shortfall shrinks with
-   the number of paths) or the European control variate in the rule (just
-   added as `rule_control_variate`, not yet tested on the labels). Cheapest;
-   test first with `price_bias_check.py --set rule_control_variate=True`.
+1. **Better exercise rule.** Tested on the six options with the clearest
+   price bias (paired, same random numbers):
+   - *European control variate in the rule*: **worse**, price −0.23 %
+     instead of −0.12 %. The rule is fitted on in-the-money paths, most of
+     them exercised soon, whose cash flow has little to do with the
+     terminal payoff, so subtracting it adds noise. Removed from the code.
+   - *4× pilot paths (400,000)*: the rule's shortfall **halves**
+     (−0.19 % → −0.095 %); the label's price bias −0.12 % → −0.08 %. Costs
+     3.2× the CPU time. The shortfall is estimation noise that shrinks
+     slowly with more paths.
 2. **Duality upper bound** (Andersen–Broadie): gives an upper price; the
    true price lies between it and ours. Expensive (nested simulation).
 3. **Statistical correction**: the bias is small, smooth and nearly uniform
@@ -188,8 +195,10 @@ answer is known.
 
 ## 7. Next steps (suggested order)
 
-1. Test the control-variate exercise rule on the price bias (cheap; may
-   remove most of the price/Δ/Γ bias).
+1. Price/Δ/Γ bias: the control-variate exercise rule failed; 4× pilot
+   paths halves the rule's shortfall at 3.2× the cost. Decide whether that
+   is worth it, or try a cheaper way to a better rule (e.g. more paths only
+   for the rule's final fit, not the width selection).
 2. Decide Bermudan vs American as the target; if American, add exercise
    dates or extrapolate (0.2–0.3 % gap).
 3. Extend the input range (moneyness 0.7–1.4, shorter T) and add
