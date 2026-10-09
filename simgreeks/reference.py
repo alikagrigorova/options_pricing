@@ -147,7 +147,7 @@ def put_fd_greeks(spec: PutSpec, style: str = "bermudan", grid: FDGrid = FDGrid(
     x-grid (so the discretisation error cancels), by central differences with
     steps h and h/2 combined by Richardson extrapolation, (4 D(h/2) - D(h)) / 3:
 
-      vega, rho, rho_d       : (P(+h) - P(-h)) / 2h
+      vega, rho, phi         : (P(+h) - P(-h)) / 2h
       volga                  : (P(+h) - 2 P + P(-h)) / h^2   (sigma only)
       vanna, delta_r, delta_d: (Delta(+h) - Delta(-h)) / 2h
       vera                   : (P(++) - P(+-) - P(-+) + P(--)) / (4 h_sigma h_r)
@@ -155,7 +155,7 @@ def put_fd_greeks(spec: PutSpec, style: str = "bermudan", grid: FDGrid = FDGrid(
     grid = replace(grid, half_width=grid.half_width or _half_width(spec, grid))
     base = put_fd(spec, style, grid)
     out = dict(base)
-    names = {"sigma": ("vega", "vanna"), "r": ("rho", "delta_r"), "d": ("rho_d", "delta_d")}
+    names = {"sigma": ("vega", "vanna"), "r": ("rho", "delta_r"), "d": ("phi", "delta_d")}
 
     def differences(k, h):
         up = put_fd(replace(spec, **{k: getattr(spec, k) + h}), style, grid)
@@ -194,6 +194,6 @@ def bs_put(spec: PutSpec) -> dict:
                 theta=(-ed * S * pdf * s / (2 * sq) + r * K * er * norm.cdf(-d2)
                        - d * S * ed * norm.cdf(-d1)),
                 vega=vega, volga=vega * d1 * d2 / s,
-                rho=-K * T * er * norm.cdf(-d2), rho_d=S * T * ed * norm.cdf(-d1),
+                rho=-K * T * er * norm.cdf(-d2), phi=S * T * ed * norm.cdf(-d1),
                 vanna=-ed * pdf * d2 / s, vera=-vega * d1 * sq / s, delta_r=ed * pdf * sq / s,
                 delta_d=T * ed * norm.cdf(-d1) - ed * pdf * sq / s)

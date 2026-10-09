@@ -15,7 +15,7 @@ paper is used to produce the replication results.
 
 The [second part](#beyond-the-paper-labels-for-a-neural-network-surrogate) extends the method to
 the Greeks with respect to σ, r and d, to generate training labels
-(price, Δ, Γ, Θ, Vega, Volga, Vanna, Rho, dividend Rho) for a neural-network
+(price, Δ, Γ, Θ, Vega, Volga, Vanna, Rho, Phi) for a neural-network
 surrogate. It is not part of the paper.
 
 Not replicated, on purpose: the binomial benchmark values (and Figure 1, which
@@ -36,7 +36,7 @@ settings as Table 5's σ = 20 %, T = 1 rows.
 | `experiments/run.py` | All experiments of Sections 3 and 4.1–4.3, plus the fixed-α\* diagnostic |
 | `experiments/diagnostics/` | Diagnostics of the α\* selector's M = M0 reading (see below), of the multivariate design and of the label price's bias |
 | `experiments/theta_check.py` | Simulated Θ vs the reference pricer's finite-difference Θ |
-| `simgreeks/multi.py` | Label generator: price and Δ, Γ, Θ, Vega, Volga, Vanna, Rho, dividend Rho by multivariate ISD (not part of the paper) |
+| `simgreeks/multi.py` | Label generator: price and Δ, Γ, Θ, Vega, Volga, Vanna, Rho, Phi (∂P/∂d, dividend Rho) by multivariate ISD (not part of the paper) |
 | `experiments/multi_check.py` | Labels vs closed form (European) and the reference pricer (American); resumable |
 | `experiments/generate_labels.py` | A labelled data set: options drawn over K, σ, r, d, T; progress every 1 %; resumable; `--exact` adds the reference values |
 | `experiments/analyze_labels.py` | Sanity checks of a label CSV and, with reference values, the bias and noise of each Greek and where the bias is |
@@ -189,7 +189,7 @@ replication its sd is 25–50 % of |Θ| at σ = 20 %. In the exercise region
 Crank–Nicolson in ln S with Rannacher smoothing, on the same exercise grid as
 the LSM (no exercise at t0), plus American and European variants. Θ is a
 central difference in calendar time across t0. `put_fd_greeks` adds Vega,
-Volga, Rho, dividend Rho, Vanna, ∂Δ/∂r, ∂Δ/∂d and Vera by bumping σ, r and d
+Volga, Rho, Phi, Vanna, ∂Δ/∂r, ∂Δ/∂d and Vera by bumping σ, r and d
 on the same x-grid, with Richardson extrapolation. Accuracy:
 - European: matches the closed form to 1e-5 in price, Δ, Γ and Θ;
 - Bermudan: matches the paper's binomial benchmarks on all 36 Table 5–6 options
@@ -207,12 +207,12 @@ One call gives one label:
 from simgreeks.core import PutSpec
 from simgreeks.multi import MultiConfig, label
 label(PutSpec(S0=40, K=40, sigma=0.2, r=0.06, d=0.0, T=1.0), MultiConfig(), seed=1)
-# -> price, delta, gamma, theta, vega, volga, vanna, rho, rho_d (dividend Rho),
+# -> price, delta, gamma, theta, vega, volga, vanna, rho, phi (dP/dd, dividend Rho),
 #    delta_r, delta_d, ex_region, alpha_S, alpha_sigma, alpha_r, alpha_d
 ```
 
 Only the moneyness S0/K matters: a label at (λS0, λK) equals the label at
-(S0, K) with price, Θ, Vega, Volga, Rho and dividend Rho multiplied by λ, Γ
+(S0, K) with price, Θ, Vega, Volga, Rho and Phi multiplied by λ, Γ
 divided by λ and the other outputs unchanged, to about 1e-10 with the same seed.
 The checks below use S0 = 40 and K = 36, 40, 44, i.e. S0/K from 0.91 to 1.11.
 
@@ -239,7 +239,7 @@ two phases on independent paths:
    added back), the value-function label, and the t = 0 Taylor regression.
 
 Price, Δ and Γ are averaged over the three runs; Vega, Volga and Vanna come from
-the (S, σ) run, Rho from (S, r), dividend Rho from (S, d); Θ follows from the
+the (S, σ) run, Rho from (S, r), Phi from (S, d); Θ follows from the
 PDE identity. When exercising at t0 is optimal (the estimated continuation
 value is at or below K − S0), the label is exact: price K − S0, Δ = −1, all
 other Greeks 0. Vera (∂²P/∂σ∂r) is available by adding the group (S, σ, r),
@@ -275,7 +275,7 @@ options where |mean − ref| / (sd/√100) > 2.576):
 | Volga | **0** (4) | 5.5 % | 161 % | – |
 | Vanna | **0** (1) | 5.1 % | 72 % | – |
 | Rho | 4 (2) | 1.2 % | 14 % | three at r = 0 (+2 to +3 %); K = 44, σ = 40 %, T = 1 (−5.8 %) |
-| dividend Rho | 3 (2) | 1.1 % | 18 % | all at r = 0 (−2 to −4 %) |
+| Phi | 3 (2) | 1.1 % | 18 % | all at r = 0 (−2 to −4 %) |
 
 Seconds per label on one core (`results/multi_check_timing.md`, Apple M3, one
 process): 1.7, 3.3 and 6.2 at T = 0.5, 1 and 2, about proportional to the 50 T
@@ -288,7 +288,7 @@ cores).
 
 Open issues:
 - **r = 0.** A put is never exercised early when r ≤ 0, so the premium has a
-  kink at r = 0 and the r and d windows straddle it: Rho and dividend Rho are
+  kink at r = 0 and the r and d windows straddle it: Rho and Phi are
   biased by 2–4 % there. The paper also finds r = d = 0 the hardest case.
 - **Price** about 0.1 % low, a lower bound; accepted for now
   (`results/diagnostics/price_bias`). On six of the flagged options, each run's

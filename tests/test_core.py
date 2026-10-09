@@ -142,7 +142,7 @@ def test_multi_control_variate_is_exact_for_european():
     spec = PutSpec(K=42, sigma=0.3, T=0.5, d=0.02)
     out = label(spec, MultiConfig(N=20_000, style="european"), 1)
     bs = bs_put(spec)
-    for k in ("price", "delta", "gamma", "vega", "volga", "rho", "rho_d", "vanna"):
+    for k in ("price", "delta", "gamma", "vega", "volga", "rho", "phi", "vanna"):
         assert np.isclose(out[k], bs[k], rtol=1e-6, atol=1e-8), k
     assert "vera" not in out                       # no default group has sigma and r
     groups = (("S", "sigma", "r"),)
@@ -164,7 +164,7 @@ def test_reference_bumped_greeks_match_closed_form():
     from simgreeks.reference import bs_put, put_fd_greeks
     spec = PutSpec(K=44, sigma=0.3, T=1.5, r=0.05, d=0.02)
     f, b = put_fd_greeks(spec, "european"), bs_put(spec)
-    for k in ("vega", "rho", "rho_d", "vanna", "vera", "volga", "delta_r", "delta_d"):
+    for k in ("vega", "rho", "phi", "vanna", "vera", "volga", "delta_r", "delta_d"):
         assert abs(f[k] - b[k]) < 1e-3 * max(1.0, abs(b[k])), k
 
 
@@ -205,7 +205,7 @@ def test_multi_taylor_regression_recovers_vera():
     expect = dict(price=2.0, delta=-0.4, vega=15.0, rho=-9.0, vera=3.0, vanna=0.7, volga=8.0)
     for k, v in expect.items():
         assert np.isclose(g[k], v, rtol=1e-6, atol=1e-8), k
-    assert np.isnan(g["rho_d"])
+    assert np.isnan(g["phi"])
 
 
 def test_multi_partial_residual():
@@ -326,7 +326,7 @@ def test_labels_scale_with_S0_and_K():
     from simgreeks.multi import MultiConfig, label
     lam = 2.5
     power = {"price": 1, "delta": 0, "gamma": -1, "theta": 1, "vega": 1, "volga": 1,
-             "vanna": 0, "rho": 1, "rho_d": 1, "delta_r": 0, "delta_d": 0,
+             "vanna": 0, "rho": 1, "phi": 1, "delta_r": 0, "delta_d": 0,
              "alpha_S": 1, "alpha_sigma": 0}
     cfg = MultiConfig(N=20_000)
     a = label(PutSpec(S0=40.0, K=44.0, T=0.5), cfg, 9)

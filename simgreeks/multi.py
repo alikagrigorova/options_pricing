@@ -119,7 +119,7 @@ GREEKS = {
     "vega": (0, 1, 0, 0),
     "volga": (0, 2, 0, 0),
     "rho": (0, 0, 1, 0),
-    "rho_d": (0, 0, 0, 1),
+    "phi": (0, 0, 0, 1),         # dP / dd (dividend rho)
     "vanna": (1, 1, 0, 0),       # d2P / dS dsigma
     "vera": (0, 1, 1, 0),        # d2P / dsigma dr
     "delta_r": (1, 0, 1, 0),     # d2P / dS dr

@@ -33,7 +33,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-GREEKS = ["price", "delta", "gamma", "theta", "vega", "volga", "vanna", "rho", "rho_d",
+GREEKS = ["price", "delta", "gamma", "theta", "vega", "volga", "vanna", "rho", "phi",
           "delta_r", "delta_d"]
 INPUTS = ["moneyness", "sigma", "T", "r", "d"]
 Z99 = 2.576

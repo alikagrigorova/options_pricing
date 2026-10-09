@@ -38,7 +38,7 @@ from simgreeks.multi import MultiConfig, label  # noqa: E402
 from simgreeks.reference import put_fd_greeks  # noqa: E402
 from simgreeks.runner import run_configs  # noqa: E402
 
-Q = ["price", "delta", "gamma", "vega", "rho", "rho_d", "vanna"]
+Q = ["price", "delta", "gamma", "vega", "rho", "phi", "vanna"]
 OUT = ROOT / "results" / "diagnostics" / "exercise_basis"
 OLD = dict(exercise_rule="insample", param_kernel="epanechnikov",
            groups=(("S", "sigma"), ("S", "r"), ("S", "d")),

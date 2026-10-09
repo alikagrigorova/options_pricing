@@ -10,7 +10,7 @@ MultiConfig; labels scale exactly with (S0, K), so S0 only sets the units.
                                           [--seed 1] [--exact] [--out PATH]
 
 Writes one CSV row per option: the inputs, the label (price, delta, gamma,
-theta, vega, volga, vanna, rho, rho_d, delta_r, delta_d, ex_region, alpha_S,
+theta, vega, volga, vanna, rho, phi, delta_r, delta_d, ex_region, alpha_S,
 alpha_sigma) and, with --exact, the reference values as exact_<greek>
 (reference.put_fd_greeks; where exercising at t_0 is optimal, the exercise
 values K - S0, -1 and 0, as in the labels). The reference values are for
@@ -52,7 +52,7 @@ from simgreeks.multi import MultiConfig, label  # noqa: E402
 from simgreeks.reference import put_fd_greeks  # noqa: E402
 from simgreeks.runner import job_seed  # noqa: E402
 
-GREEKS = ["price", "delta", "gamma", "theta", "vega", "volga", "vanna", "rho", "rho_d",
+GREEKS = ["price", "delta", "gamma", "theta", "vega", "volga", "vanna", "rho", "phi",
           "delta_r", "delta_d"]
 INPUTS = ["id", "S0", "K", "sigma", "r", "d", "T"]
 EXTRA = ["ex_region", "alpha_S", "alpha_sigma"]

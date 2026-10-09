@@ -37,7 +37,7 @@ from simgreeks.runner import run_configs  # noqa: E402
 RESULTS = ROOT / "results"
 GREEK_LETTERS = {"sigma": "σ"}
 KEYS = ["T", "sigma", "r", "d", "K"]
-QUANTS = ["price", "delta", "gamma", "theta", "vega", "volga", "rho", "rho_d", "vanna",
+QUANTS = ["price", "delta", "gamma", "theta", "vega", "volga", "rho", "phi", "vanna",
           "delta_r", "delta_d"]
 
 
