@@ -246,7 +246,41 @@ Each design choice fixes a bias found in the checks:
 | Rule refitted on the rescaled pilot | A rule fitted on the wide pilot is poor where the main paths are: price −0.4 % at σ = 10 % | quick checks |
 | Exercise at t1 by the rule, not max(Z, Ĉ) | The max turns the fit's estimation error into an upward bias, convex in σ: Volga +34 % at K = 44, σ = 20 %, T = 1 (−> +1 %) | quick checks |
 
-VALIDATION_SECTION
+Checks (`experiments/multi_check.py`, 100 replications per option; † counts
+options where |mean − ref| / (sd/√100) > 2.576):
+
+- **European** (no early exercise, no control variate), 6 options against the
+  closed form: **0 of 66** estimates flagged (`results/multi_check_european.md`).
+- **American**, 33 options (the Table 5 grid plus Table 6's (r, d)) against the
+  reference pricer with σ, r, d bumped (`results/multi_check_american.md`; the
+  first design, fixed widths and max(Z, Ĉ) at t1, in `_v1`):
+
+| Greek | flagged (v1) | median bias | noise of one label | flags |
+|---|---|---|---|---|
+| Price | 24 (22) | 0.1 % | < 1 % | all low: the out-of-sample rule makes the price a lower bound |
+| Δ | 9 (7) | 0.2 % | 1 % | out of the money and r = d options, +0.2 to +1.5 % |
+| Γ | 3 (5) | 1.3 % | 10 % | K = 36, σ = 20 % (−1.4 %, −2.4 %); σ = 10 %, K = 40, T = 1 (−2.5 %) |
+| Θ | 3 (4) | 1.4 % | 18 % | the same options as Γ |
+| Vega | 1 (0) | 0.4 % | 5 % | r = 0 (−0.7 %) |
+| Volga | **0** (4) | 5.5 % | 161 % | – |
+| Vanna | **0** (1) | 5.1 % | 72 % | – |
+| Rho | 4 (2) | 1.2 % | 14 % | three at r = 0 (+2 to +3 %); K = 44, σ = 40 %, T = 1 (−5.8 %) |
+| dividend Rho | 3 (2) | 1.1 % | 18 % | all at r = 0 (−2 to −4 %) |
+
+Seconds per label on one core (`results/multi_check_timing.md`): 4.1, 7.1 and
+13.3 at T = 0.5, 1 and 2 (first design: 0.6, 1.1, 2.0). The pilot, the rule
+refit and the selection cost about 6.5×; labels are independent, so the time
+divides by the number of cores.
+
+Open issues:
+- **r = 0.** A put is never exercised early when r ≤ 0, so the premium has a
+  kink at r = 0 and the r and d windows straddle it: Rho and dividend Rho are
+  biased by 2–4 % there. The paper also finds r = d = 0 the hardest case.
+- **Price** about 0.1 % low, **out-of-the-money Δ** up to +1.5 %, and **Γ, Θ**
+  1–2.5 % off on three options.
+- **Volga and Vanna** are unbiased but a single label is very noisy (median
+  161 % and 72 % of the Greek): a network needs many labels to learn them.
+- **Runtime.** About 7 s per one-year label on one core.
 
 ## Choices the paper leaves open
 
