@@ -13,7 +13,7 @@
 
 Writes results/multi_check_<exp>.md and results/raw/multi_check_<exp>.csv.
 --set changes a MultiConfig field of the american check (multi.config_from), e.g.
---set rule_control_variate=True; --name NAME then writes multi_check_american_NAME.*.
+--set N_pilot=400_000; --name NAME then writes multi_check_american_NAME.*.
 Seeds do not depend on the configuration, so a variant shares its random numbers
 with the default check and the two can be compared label by label.
 Labels are saved after each option (results/raw/multi_check_<exp>.partial.csv),

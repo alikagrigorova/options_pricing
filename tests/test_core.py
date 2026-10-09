@@ -2,7 +2,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -242,11 +241,10 @@ def test_multi_select_widths_on_a_known_curve():
     assert widths[1]["S"] < widths[0]["S"] and widths[1]["sigma"] < widths[0]["sigma"]
 
 
-@pytest.mark.parametrize("rule_cv", [False, True])
-def test_multi_exercise_rules_out_of_sample(rule_cv):
+def test_multi_exercise_rules_out_of_sample():
     from simgreeks.multi import MultiConfig, brownian, isd_multi, lsm_multi
     spec = PutSpec(K=40, T=0.5)
-    cfg = MultiConfig(N=20_000, rule_control_variate=rule_cv)
+    cfg = MultiConfig(N=20_000)
     rng = np.random.default_rng(3)
     a0, a = {"S": 10.0, "sigma": 0.12}, {"S": 4.0, "sigma": 0.05}
     zp = isd_multi(spec, cfg, a0, rng)
@@ -260,24 +258,6 @@ def test_multi_exercise_rules_out_of_sample(rule_cv):
     assert np.all(np.isfinite(Yn_out)) and np.all(np.isfinite(Yvf_out))
     _, _, fits = lsm_multi(spec, cfg, z, W, a)               # in-sample: own fits
     assert not np.allclose(fits[10][0], rules[10][0])
-
-
-def test_multi_rule_control_variate_at_r0():
-    """With r = 0 early exercise is never optimal. The rule's premium cash flow
-    Y_j - D_j is then exactly 0, so the control-variate rule exercises nowhere and
-    every path pays its European payoff; the plain rule exercises some paths."""
-    from simgreeks.multi import MultiConfig, brownian, isd_multi, lsm_multi, stock_at
-    spec = PutSpec(K=44, T=0.5, r=0.0, d=0.02)
-    a = {"S": 6.0, "sigma": 0.05}
-    exercised = {}
-    for rule_cv in (False, True):
-        cfg = MultiConfig(N=20_000, rule_control_variate=rule_cv)
-        rng = np.random.default_rng(5)
-        z = isd_multi(spec, cfg, a, rng)
-        W = brownian(spec, cfg.N, rng)
-        Y, _, _ = lsm_multi(spec, cfg, z, W, a)
-        exercised[rule_cv] = np.mean(Y != spec.payoff(stock_at(spec, z, W, spec.J)))
-    assert exercised[True] == 0.0 and exercised[False] > 0.05
 
 
 def test_multi_label_widths():

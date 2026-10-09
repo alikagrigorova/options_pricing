@@ -150,11 +150,17 @@ def report(mc, settings):
 
 def compare(names):
     """Mean bias over the options of the rule value and the label, for each
-    variant, and the paired difference to the first variant (same seeds)."""
+    variant, and the paired difference to the first variant (same seeds), over the
+    (option, replication) pairs every variant has."""
     refs = {o: put_fd_greeks(spec_of(o))["price"] for o in OPTIONS}
-    data = {n: with_default_label(pd.read_csv(out_dir(n) / "raw.csv")
-                                  .sort_values(KEYS + ["rep"], ignore_index=True))
-            for n in names}
+    data = {n: pd.read_csv(out_dir(n) / "raw.csv") for n in names}
+    common = None
+    for mc in data.values():
+        keys = mc[KEYS + ["rep"]]
+        common = keys if common is None else common.merge(keys)
+    data = {n: with_default_label(mc.merge(common).sort_values(KEYS + ["rep"],
+                                                                ignore_index=True))
+            for n, mc in data.items()}
     settings = {n: json.loads((out_dir(n) / "settings.json").read_text())
                 if (out_dir(n) / "settings.json").exists() else [] for n in names}
     ref = pd.Series([refs[tuple(r)] for r in data[names[0]][KEYS].itertuples(index=False)])
@@ -164,7 +170,7 @@ def compare(names):
              "S: the run with S alone dispersed; multivariate: mean of the (S, σ), "
              "(S, r), (S, d) runs; label default: the default label (their mean). Δ vs "
              f"{names[0]}: paired difference (same seeds). CPU: mean seconds per "
-             "multivariate run (one process).\n",
+             "multivariate run (one process). Replications: those every variant has.\n",
              "| variant | settings | rule, S | rule, multivariate | label default "
              f"| Δ rule multivariate vs {names[0]} | Δ label vs {names[0]} | CPU s |",
              "|---|---|---|---|---|---|---|---|"]
