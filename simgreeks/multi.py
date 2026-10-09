@@ -27,6 +27,18 @@ early-exercise premium cash flow. The label is
 whose conditional mean is P_American(z) - P_European(z); the closed-form
 European Greeks at z0 are added back.
 
+Exercise rule. At t_j (j = J-1..1) the continuation value of the in-the-money
+paths is a regression on Chebyshev(S) x parameter monomials, and a path is
+exercised when Z(t_j) >= C_j. With rule_control_variate=True the regression is
+of the premium cash flow Y_j - D_j instead of the cash flow Y_j, where
+D_j = e^{-r_n (T - t_j)} Z(T) is the path's discounted European payoff, and
+    C_j = E_j + pi_j,   E_j = closed-form European put (path's own S(t_j), sigma_n,
+                              r_n, d_n, maturity T - t_j).
+E[Y_j - D_j | state] = C_j - E_j, so this is the same continuation value, but
+the polynomial only approximates the premium (small, flat far from the exercise
+boundary) and its target has far less variance than Y_j (D_j and Y_j share the
+terminal payoff wherever the rule does not exercise later).
+
 Taylor regression at t = 0. Y is regressed on monomials of x_k = (z_k - z0_k)/h_k.
 The coefficient c of x_S^i x_sigma^a1 x_r^a2 x_d^a3 gives
     d^(i+|a|) P / dS^i dsigma^a1 dr^a2 dd^a3 = i! a1! a2! a3! c / (h_S^i h_sigma^a1 h_r^a2 h_d^a3),
@@ -71,9 +83,10 @@ other Greeks 0.
 """
 from __future__ import annotations
 
+import ast
 import itertools
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from math import factorial
 
 import numpy as np
@@ -138,6 +151,7 @@ class MultiConfig:
     M0: int = 9                    # S-order of the t = 0 basis
     weight: int = 3                # exercise-rule basis: terms with i + weight |a| <= M_tau
     weight_vf: int = 1             # same for the t_1 value-function and t = 0 bases
+    rule_control_variate: bool = False  # exercise rule: C = European put + regressed premium
     param_degree: int = 3          # all bases: |a| <= param_degree
     style: str = "bermudan"        # "bermudan" (LSM) or "european" (no early exercise)
     control_variate: bool = True   # European control variate (see module doc)
@@ -167,6 +181,23 @@ class MultiConfig:
     def uses_pilot(self) -> bool:
         return self.widths == "selector" or (self.style == "bermudan"
                                              and self.exercise_rule == "pilot")
+
+
+def config_from(settings=()) -> MultiConfig:
+    """MultiConfig with fields set from "name=value" strings, the values read as
+    Python literals (else as strings), e.g. ("N_pilot=200_000",
+    "rule_control_variate=True"). For command-line scripts."""
+    names = {f.name for f in fields(MultiConfig)}
+    kw = {}
+    for item in settings:
+        name, sep, value = item.partition("=")
+        if not sep or name.strip() not in names:
+            raise ValueError(f"expected name=value with name one of {sorted(names)}, got {item!r}")
+        try:
+            kw[name.strip()] = ast.literal_eval(value.strip())
+        except (ValueError, SyntaxError):
+            kw[name.strip()] = value.strip()
+    return MultiConfig(**kw)
 
 
 def _center(spec: PutSpec) -> dict:
@@ -372,9 +403,11 @@ def lsm_multi(spec: PutSpec, cfg: MultiConfig, z: dict, W: np.ndarray, scale: di
     ``scale`` has one width per dispersed coordinate: the parameters enter the
     bases as (z_k - z0_k) / scale[k]. Stored rules must be applied with the
     scale they were fitted with.
-    Exercise rule at t_1..t_{J-1}: in-the-money regression on (S, parameters),
-    fitted on these paths if ``rules`` is None, else the stored fits
-    ``rules[j]`` are applied (out of sample). ``rules`` returned are the fits used.
+    Exercise rule at t_1..t_{J-1}: in-the-money regression on (S, parameters)
+    of the cash flow, or with cfg.rule_control_variate of the premium cash flow
+    (module doc), fitted on these paths if ``rules`` is None, else the stored
+    fits ``rules[j]`` are applied (out of sample; they must come from a config
+    with the same rule_control_variate). ``rules`` returned are the fits used.
     Y_vf = e^{-r_n dt} V(t_1) with V = C_1 ("european") or, for "bermudan",
     V = max(Z, C_1) (cfg.vf_rule="max") or V = Z where the exercise rule at t_1
     exercises and C_1 elsewhere ("rule"); C_1 is fitted on all paths; with cfg.control_variate, Y_vf is
@@ -402,15 +435,22 @@ def lsm_multi(spec: PutSpec, cfg: MultiConfig, z: dict, W: np.ndarray, scale: di
         exercise = np.zeros(N, dtype=bool)
         if cfg.style == "bermudan":
             itm = ex > 0.0
+            tau = spec.T - j * spec.dt
             if rules is not None:
                 fits[j] = rules.get(j)
             elif itm.sum() > 5 * len(index):
-                fits[j] = _fit(Sj[itm], mono[itm], index, cash[itm], cfg.M_tau)
+                y = cash[itm]
+                if cfg.rule_control_variate:        # premium cash flow Y_j - D_j
+                    y = y - np.exp(-z["r"][itm] * tau) * euro_payoff[itm]
+                fits[j] = _fit(Sj[itm], mono[itm], index, y, cfg.M_tau)
             else:
                 fits[j] = None
             if fits[j] is not None and itm.any():
-                exercise[itm] = ex[itm] >= _predict(fits[j], Sj[itm], mono[itm], index,
-                                                    cfg.M_tau)
+                cont = _predict(fits[j], Sj[itm], mono[itm], index, cfg.M_tau)
+                if cfg.rule_control_variate:
+                    cont += european_put(Sj[itm], spec.K, tau, z["sigma"][itm],
+                                         z["r"][itm], z["d"][itm])
+                exercise[itm] = ex[itm] >= cont
         if j == 1 and value_function:
             if cfg.control_variate:
                 tau = spec.T - spec.dt
