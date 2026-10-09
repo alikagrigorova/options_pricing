@@ -177,7 +177,7 @@ def main():
     ap.add_argument("experiments", nargs="+", choices=["european", "american", "timing"])
     ap.add_argument("--reps", type=int, default=100)
     ap.add_argument("--workers", type=int, default=None,
-                    help="processes (default: all cores; ~300 MB each)")
+                    help="processes (default: all cores; ~0.7 GB each)")
     args = ap.parse_args()
     groups = ", ".join("(" + ", ".join(GREEK_LETTERS.get(k, k) for k in g) + ")"
                        for g in MultiConfig().groups)

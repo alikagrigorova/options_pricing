@@ -193,7 +193,7 @@ on the same x-grid, with Richardson extrapolation. Accuracy:
 - halving the grid steps changes every output by < 3e-4;
 - bumped Greeks: match the European closed forms to 1e-3; the Bermudan Volga
   moves by up to 0.3 under grid refinement at the money (Volga ≈ 5.7 there);
-- about 0.1 s per option, about 3 s with all bumped Greeks.
+- about 0.1 s per option, about 1.5 s with all bumped Greeks at T = 1.
 
 ### Multivariate Greeks: the label generator (`simgreeks/multi.py`)
 
@@ -206,6 +206,11 @@ label(PutSpec(S0=40, K=40, sigma=0.2, r=0.06, d=0.0, T=1.0), MultiConfig(), seed
 # -> price, delta, gamma, theta, vega, volga, vanna, rho, rho_d (dividend Rho),
 #    delta_r, delta_d, ex_region, alpha_S, alpha_sigma, alpha_r, alpha_d
 ```
+
+Only the moneyness S0/K matters: a label at (λS0, λK) equals the label at
+(S0, K) with price, Θ, Vega, Volga, Rho and dividend Rho multiplied by λ, Γ
+divided by λ and the other outputs unchanged, to about 1e-10 with the same seed.
+The checks below use S0 = 40 and K = 36, 40, 44, i.e. S0/K from 0.91 to 1.11.
 
 The paper's method is extended from S to σ, r and d: each path starts from its
 own (S_n, σ_n, r_n, d_n) and keeps its parameters for its whole life,
@@ -259,7 +264,7 @@ options where |mean − ref| / (sd/√100) > 2.576):
 | Greek | flagged (v1) | median bias | noise of one label | flags |
 |---|---|---|---|---|
 | Price | 24 (22) | 0.1 % | < 1 % | all low: an estimated exercise rule is suboptimal, so the price is a lower bound (see below) |
-| Δ | 9 (7) | 0.2 % | 1 % | out of the money and r = d options, +0.2 to +1.5 % |
+| Δ | 9 (7) | 0.2 % | 1 % | out of the money and r = d options, +0.2 to +1.5 %: the price's lower bound (see below) |
 | Γ | 3 (5) | 1.3 % | 10 % | K = 36, σ = 20 % (−1.4 %, −2.4 %); σ = 10 %, K = 40, T = 1 (−2.5 %) |
 | Θ | 3 (4) | 1.4 % | 18 % | the same options as Γ |
 | Vega | 1 (0) | 0.4 % | 5 % | r = 0 (−0.7 %) |
@@ -268,10 +273,14 @@ options where |mean − ref| / (sd/√100) > 2.576):
 | Rho | 4 (2) | 1.2 % | 14 % | three at r = 0 (+2 to +3 %); K = 44, σ = 40 %, T = 1 (−5.8 %) |
 | dividend Rho | 3 (2) | 1.1 % | 18 % | all at r = 0 (−2 to −4 %) |
 
-Seconds per label on one core (`results/multi_check_timing.md`): 4.1, 7.1 and
-13.3 at T = 0.5, 1 and 2 (first design: 0.6, 1.1, 2.0). The pilot, the rule
-refit and the selection cost about 6.5×; labels are independent, so the time
-divides by the number of cores.
+Seconds per label on one core (`results/multi_check_timing.md`, Apple M3, one
+process): 1.7, 3.3 and 6.2 at T = 0.5, 1 and 2, about proportional to the 50 T
+exercise dates. The first design took 0.7, 1.4 and 2.5, so the pilot, the rule
+refit and the selection cost about 2.4×. Peak memory is 0.6–0.7 GB per process.
+Labels are independent, but processes share the memory bandwidth: with 4 at
+once a one-year label took 4.5 s each, with 8 at once 7.7 s each, i.e. 2.9× and
+4.3× the throughput of one process (the M3 has 4 performance and 4 efficiency
+cores).
 
 Open issues:
 - **r = 0.** A put is never exercised early when r ≤ 0, so the premium has a
@@ -291,11 +300,21 @@ Open issues:
   prices of Table 6 high (+0.1 to +0.2 %), where no early exercise is optimal
   and only the upward biases remain. Unbiased alternatives: the PDE price (this
   model only) or a duality upper bound (costly).
-- **Out-of-the-money Δ** up to +1.5 %, and **Γ, Θ** 1–2.5 % off on three
-  options.
+- **Δ** inherits the price's lower bound. Over the 30 options outside the
+  exercise region the price is low in all 30 and |Δ| too small in 28, and the
+  relative biases of price and Δ have correlation 0.91: the rule's shortfall
+  grows as S falls, which flattens the fitted price curve. The bias reaches
+  +1.5 % out of the money, where Δ is small. A better exercise rule would
+  reduce both. **Γ, Θ** are 1–2.5 % off on three options.
+- **Bermudan, not American.** Exercise is possible on J = round(50 T) dates.
+  With the reference pricer, the American put is 0.2–0.3 % above the Bermudan
+  one (S0 = 40, K = 36–44, σ = 20 %, T ≈ 0.5 and 1; the American variant is
+  first order in time), and the Bermudan price jumps by 0.01–0.05 % where
+  round(50 T) steps.
+  Both matter if T is an input of a network.
 - **Volga and Vanna** are unbiased but a single label is very noisy (median
   161 % and 72 % of the Greek): a network needs many labels to learn them.
-- **Runtime.** About 7 s per one-year label on one core.
+- **Runtime.** About 3.3 s per one-year label on one core.
 
 ## Choices the paper leaves open
 
@@ -315,6 +334,14 @@ the global pilot of order M + 3 "using all data"; w0 "the indicator function";
   zero, so h_ROT is infinite and the local fit uses all data.
 - α\* is capped at 0.75 S0, only to keep rescaled prices positive. The cap
   never binds in the reported runs.
+- For the stock, the selector runs in units where S0 = 40 (`x_unit = S0 / 40`).
+  (A.3) as printed divides ∫w0/f, which has units of S², by a sum over paths,
+  which has none, so h_ROT scales as S0^((2q+2)/(2q+1)) instead of S0, and α\*
+  would depend on the currency unit: at S0 = 100 instead of 40, with the same
+  S0/K and seed, the generator's α_S\* differed by 4–14 % and the Greeks by up
+  to their noise. With fixed units, α\* and every output scale exactly with S0
+  (`tests/test_core.py`). Results at S0 = 40, i.e. everything in this README,
+  are unchanged.
 - `AlgoConfig(selector_reading="fg")` uses Fan & Gijbels' constants instead of
   the printed ones.
 
