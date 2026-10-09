@@ -9,8 +9,13 @@
   timing   : single-process seconds per label for T = 0.5, 1, 2.
 
     python experiments/multi_check.py european american timing [--reps 100] [--workers N]
+                                      [--set name=value ...] [--name NAME]
 
 Writes results/multi_check_<exp>.md and results/raw/multi_check_<exp>.csv.
+--set changes a MultiConfig field of the american check (multi.config_from), e.g.
+--set rule_control_variate=True; --name NAME then writes multi_check_american_NAME.*.
+Seeds do not depend on the configuration, so a variant shares its random numbers
+with the default check and the two can be compared label by label.
 Labels are saved after each option (results/raw/multi_check_<exp>.partial.csv),
 and a rerun resumes from there.
 """
@@ -29,7 +34,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from simgreeks.core import PutSpec  # noqa: E402
-from simgreeks.multi import MultiConfig, label  # noqa: E402
+from simgreeks.multi import MultiConfig, config_from, label  # noqa: E402
 from simgreeks.reference import bs_put, put_fd_greeks  # noqa: E402
 from simgreeks.report import Z99  # noqa: E402
 from simgreeks.runner import run_configs  # noqa: E402
@@ -178,7 +183,13 @@ def main():
     ap.add_argument("--reps", type=int, default=100)
     ap.add_argument("--workers", type=int, default=None,
                     help="processes (default: all cores; ~0.7 GB each)")
+    ap.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
+                    help="MultiConfig field of the american check (repeatable)")
+    ap.add_argument("--name", default=None,
+                    help="suffix of the american check's output files (required with --set)")
     args = ap.parse_args()
+    if args.set and not args.name:
+        ap.error("--set needs --name, so the default results are not overwritten")
     groups = ", ".join("(" + ", ".join(GREEK_LETTERS.get(k, k) for k in g) + ")"
                        for g in MultiConfig().groups)
     common = (f"{args.reps} replications per option; one label = independent runs with "
@@ -194,9 +205,11 @@ def main():
                   common + " No early exercise and no control variate: this checks the "
                   "multivariate regressions alone.", args.workers)
         elif e == "american":
-            check("american", american_grid(), MultiConfig(), args.reps, 7002,
+            name = f"american_{args.name}" if args.name else "american"
+            settings = f" Settings changed: {', '.join(args.set)}." if args.set else ""
+            check(name, american_grid(), config_from(args.set), args.reps, 7002,
                   "Multivariate ISD, Bermudan put vs reference PDE pricer",
-                  common + " Exercise rule fitted on the pilot paths rescaled to the "
+                  common + settings + " Exercise rule fitted on the pilot paths rescaled to the "
                   "chosen widths (parameter box 1.3× wider) and also used at t_1 in the "
                   "value-function label. European control variate on. Reference: "
                   "Crank-Nicolson (simgreeks.reference), Greeks in σ, r, d by bumping with "
