@@ -12,6 +12,12 @@ from .core import PutSpec
 from .methods import AlgoConfig, run_fixed_alpha, run_once
 
 
+def job_seed(base_seed: int, tags: dict, rep: int) -> np.random.SeedSequence:
+    """Seed of one replication, from (base_seed, tags, rep) only."""
+    key = zlib.crc32(repr(sorted(tags.items())).encode())
+    return np.random.SeedSequence([base_seed, key, rep])
+
+
 def _job(args):
     spec, cfg, seed, extra, tags = args
     if "fn" in extra:               # e.g. simgreeks.multi.label -> one dict row
@@ -41,9 +47,8 @@ def run_configs(configs, reps: int, base_seed: int = 20191214,
     jobs = []
     for c in configs:
         tags = c.get("tags", {})
-        key = zlib.crc32(repr(sorted(tags.items())).encode())
         for rep in range(reps):
-            seed = np.random.SeedSequence([base_seed, key, rep])
+            seed = job_seed(base_seed, tags, rep)
             t = dict(tags, rep=rep)
             extra = {k: c[k] for k in ("M0_list", "nu_list", "alpha_stars", "modes", "fn")
                      if k in c}
@@ -58,4 +63,4 @@ def run_configs(configs, reps: int, base_seed: int = 20191214,
     return pd.DataFrame(rows)
 
 
-__all__ = ["run_configs", "PutSpec", "AlgoConfig"]
+__all__ = ["run_configs", "job_seed", "PutSpec", "AlgoConfig"]

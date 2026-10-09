@@ -38,6 +38,8 @@ settings as Table 5's σ = 20 %, T = 1 rows.
 | `experiments/theta_check.py` | Simulated Θ vs the reference pricer's finite-difference Θ |
 | `simgreeks/multi.py` | Label generator: price and Δ, Γ, Θ, Vega, Volga, Vanna, Rho, dividend Rho by multivariate ISD (not part of the paper) |
 | `experiments/multi_check.py` | Labels vs closed form (European) and the reference pricer (American); resumable |
+| `experiments/generate_labels.py` | A labelled data set: options drawn over K, σ, r, d, T; progress every 1 %; resumable; `--exact` adds the reference values |
+| `experiments/analyze_labels.py` | Sanity checks of a label CSV and, with reference values, the bias and noise of each Greek and where the bias is |
 | `data/paper_tables.csv` | Tables 1–9 of the paper (BM, estimates, std devs, † flags) |
 | `results/` | Output tables (`*.md`), figures, per-replication estimates (`raw/`), diagnostics |
 
@@ -50,6 +52,8 @@ python experiments/run.py fixed_alpha --reps 100    # fixed-alpha* diagnostic (�
 python experiments/run.py table5_heuristic          # placeholder alpha* on Table 5 (≈ 4 min on 8 cores)
 python experiments/theta_check.py                   # Theta vs reference pricer (≈ 5 min on 8 cores)
 python experiments/multi_check.py american european timing   # labels (≈ 2.5 h on 4 cores; resumes if interrupted)
+python experiments/generate_labels.py --n 1000 --workers 8 --exact --out results/labels_1000.csv   # ≈ 35 min on an M3
+python experiments/analyze_labels.py results/labels_1000.csv --plots results/labels_1000_analysis
 python experiments/diagnostics/multi_design_check.py          # exercise rule and σ design of the labels
 python experiments/diagnostics/price_bias_check.py            # why the label price is low (≈ 12 min on 4 cores)
 python experiments/diagnostics/table9_selector_trace.py
