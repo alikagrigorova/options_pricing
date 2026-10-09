@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .core import PutSpec, greeks_regression, isd_sample, lsm, simulate_growth, theta_pde
-from .selector import ALPHA_CAP, select_alpha
+from .selector import ALPHA_CAP, S_REF, select_alpha
 
 METHODS = ("NAIVE", "NAIVE-VF", "TRUNC-VF", "2STEP-VF")
 
@@ -100,7 +100,7 @@ def alpha_star(spec: PutSpec, cfg: AlgoConfig, X, Y_vf, M0: int, nu: int) -> flo
         return float(min(a, ALPHA_CAP * spec.S0))
     M = M0 if cfg.selector_order == "M0" else nu + 1
     return select_alpha(X, Y_vf, spec.S0, cfg.alpha, cfg.isd_kernel, M, nu,
-                        cfg.selector_reading)["alpha_star"]
+                        cfg.selector_reading, x_unit=spec.S0 / S_REF)["alpha_star"]
 
 
 def run_once(spec: PutSpec, cfg: AlgoConfig, seed, M0_list=None, nu_list=None):

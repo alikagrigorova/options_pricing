@@ -39,7 +39,12 @@ Not specified by the paper, chosen here:
   * h_ROT is not clipped; for nu = 1 the printed (A.3) integral is zero, so
     h_ROT is infinite and the local fit uses all data;
   * alpha* is capped at 0.75 x0 only to keep rescaled prices positive;
-  * reading="fg" (Fan & Gijbels' constants) is offered as an alternative.
+  * reading="fg" (Fan & Gijbels' constants) is offered as an alternative;
+  * the selector runs in units of X where the stock starts at S_REF (x_unit).
+    (A.3) as printed divides int w0/f, which has units of X^2, by a sum over
+    paths, which has none, so h_ROT scales as X^((2q+2)/(2q+1)), not as X, and
+    alpha* would depend on the currency unit of S. Fixing the units makes
+    alpha* scale exactly with S0 and leaves S0 = S_REF unchanged.
 """
 from __future__ import annotations
 
@@ -50,6 +55,7 @@ import numpy as np
 
 C_W0 = 0.9
 ALPHA_CAP = 0.75                 # alpha* <= ALPHA_CAP * x0 keeps rescaled prices positive
+S_REF = 40.0                     # the paper's S0: the stock's selector runs as if S0 = S_REF
 READINGS = ("literal", "fg")
 
 
@@ -105,7 +111,8 @@ def poly_fit(X, Y, x0, h, order):
 
 
 def select_alpha(X, Y, x0: float, alpha0: float, isd_kernel: str = "epanechnikov",
-                 M: int = 9, nu: int = 2, reading: str = "literal", glob=None) -> dict:
+                 M: int = 9, nu: int = 2, reading: str = "literal", glob=None,
+                 x_unit: float = 1.0) -> dict:
     """alpha* and the selector's intermediate quantities.
 
     X, Y   : initially dispersed states and the value-function payoffs
@@ -113,7 +120,18 @@ def select_alpha(X, Y, x0: float, alpha0: float, isd_kernel: str = "epanechnikov
     M      : polynomial order of the t = 0 regression (M0)
     nu     : derivative alpha* is optimised for (0 price, 1 Delta, 2 Gamma)
     glob   : optional precomputed global pilot poly_fit(X, Y, x0, alpha0, M + 3)
+    x_unit : the selector runs on X / x_unit (module doc); the results are
+             returned in the units of X. Use S0 / S_REF for the stock.
     """
+    if x_unit != 1.0:
+        u = float(x_unit)
+        g = None if glob is None else (glob[0] * u ** np.arange(len(glob[0])), glob[1])
+        out = select_alpha(X / u, Y, x0 / u, alpha0 / u, isd_kernel, M, nu, reading, g)
+        out.update(alpha_star=out["alpha_star"] * u, alpha_raw=out["alpha_raw"] * u,
+                   h_rot=out["h_rot"] * u, beta_q=out["beta_q"] / u ** out["q"],
+                   f_x0=out["f_x0"] / u,
+                   global_coefs=out["global_coefs"] / u ** np.arange(len(out["global_coefs"])))
+        return out
     k = constants(M, nu, reading)
     q, qr, a = k["q"], k["q_rot"], k["a"]
     N = len(X)

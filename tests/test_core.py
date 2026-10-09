@@ -280,3 +280,43 @@ def test_multi_config_validation():
         with pytest.raises(ValueError):
             MultiConfig(**bad)
     MultiConfig(c_sigma=0.8, pilot_widen=1.2)
+
+
+def test_selector_scales_with_the_units_of_S():
+    # (A.3) as printed is not scale-equivariant; with x_unit the selector runs
+    # in fixed units, so alpha* scales exactly with S0.
+    from simgreeks.selector import S_REF, select_alpha
+    X = isd_sample(50_000, 40.0, 10.0, "epanechnikov")
+    x = X - 40.0
+    Y = 2.0 - 0.4 * x + 0.03 * x ** 2 - 1e-3 * x ** 3 + 2e-5 * x ** 4 \
+        + 0.05 * np.random.default_rng(6).standard_normal(len(X))
+    lam = 2.5
+    a = select_alpha(X, Y, 40.0, 10.0, "epanechnikov", 3, 2)
+    b = select_alpha(lam * X, lam * Y, 40.0 * lam, 10.0 * lam, "epanechnikov", 3, 2,
+                     x_unit=lam * 40.0 / S_REF)
+    assert np.isclose(b["alpha_star"], lam * a["alpha_star"], rtol=1e-9)
+    assert np.isclose(b["h_rot"], lam * a["h_rot"], rtol=1e-9)
+    raw = select_alpha(lam * X, lam * Y, 40.0 * lam, 10.0 * lam, "epanechnikov", 3, 2)
+    assert np.isclose(raw["h_rot"], lam ** (10 / 9) * a["h_rot"], rtol=1e-9)
+
+
+def test_labels_scale_with_S0_and_K():
+    # P(lam S, lam K) = lam P(S, K): each output scales by lam to its power
+    from simgreeks.methods import AlgoConfig, run_once
+    from simgreeks.multi import MultiConfig, label
+    lam = 2.5
+    power = {"price": 1, "delta": 0, "gamma": -1, "theta": 1, "vega": 1, "volga": 1,
+             "vanna": 0, "rho": 1, "rho_d": 1, "delta_r": 0, "delta_d": 0,
+             "alpha_S": 1, "alpha_sigma": 0}
+    cfg = MultiConfig(N=20_000)
+    a = label(PutSpec(S0=40.0, K=44.0, T=0.5), cfg, 9)
+    b = label(PutSpec(S0=40.0 * lam, K=44.0 * lam, T=0.5), cfg, 9)
+    for k, p in power.items():
+        assert np.isclose(b[k], a[k] * lam ** p, rtol=1e-6, atol=1e-12), k
+    ra = run_once(PutSpec(S0=40.0, K=44.0, T=0.5), AlgoConfig(N=20_000), 9)
+    rb = run_once(PutSpec(S0=40.0 * lam, K=44.0 * lam, T=0.5),
+                  AlgoConfig(N=20_000, alpha=10.0 * lam), 9)
+    for x, y in zip(ra, rb):
+        for k, p in (("price", 1), ("delta", 0), ("gamma", -1), ("alpha_star", 1)):
+            if np.isfinite(x[k]):
+                assert np.isclose(y[k], x[k] * lam ** p, rtol=1e-6), (x["method"], k)

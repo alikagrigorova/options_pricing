@@ -84,7 +84,7 @@ from scipy.stats import qmc
 
 from .core import PutSpec, isd_kernel, theta_pde
 from .reference import bs_put
-from .selector import ALPHA_CAP, select_alpha
+from .selector import ALPHA_CAP, S_REF, select_alpha
 
 DIMS = ("S", "sigma", "r", "d")
 PARAMS = ("sigma", "r", "d")
@@ -219,7 +219,8 @@ def select_widths(spec: PutSpec, cfg: MultiConfig, z: dict, Y: np.ndarray,
     for k in selected:
         kernel = "epanechnikov" if k == "S" else cfg.param_kernel
         a = select_alpha(z[k], partial_residual(fit, Y, k), center[k], alphas0[k], kernel,
-                         M=NU[k] + 1, nu=NU[k])["alpha_star"]
+                         M=NU[k] + 1, nu=NU[k],
+                         x_unit=spec.S0 / S_REF if k == "S" else 1.0)["alpha_star"]
         cap = min(alphas0[k], ALPHA_CAP * spec.S0) if k == "S" else alphas0[k] / cfg.pilot_widen
         out[k] = float(min(a, cap))
     return out
