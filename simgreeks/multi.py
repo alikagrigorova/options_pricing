@@ -494,31 +494,36 @@ def greeks_multi(spec: PutSpec, cfg: MultiConfig, dims, z: dict, Y: np.ndarray,
 # --------------------------------------------------------------------------
 # One run, one label
 # --------------------------------------------------------------------------
+def pilot(spec: PutSpec, cfg: MultiConfig, dims, rng: np.random.Generator):
+    """Pilot phase of a run (module doc). Returns (alphas, scale, rules): the
+    widths for the main paths, the scale the exercise rule was fitted with and
+    the rule (None: fitted on the main paths)."""
+    alphas = fixed_widths(spec, cfg, dims)
+    if not cfg.uses_pilot:
+        return alphas, alphas, None
+    alphas0 = pilot_widths(spec, cfg, dims)
+    Np = cfg.N_pilot or cfg.N
+    zp = isd_multi(spec, cfg, alphas0, rng, Np)
+    Wp = brownian(spec, Np, rng)
+    _, Yp, fits = lsm_multi(spec, cfg, zp, Wp, alphas0,
+                            value_function=cfg.widths == "selector")
+    scale = alphas0
+    if cfg.widths == "selector":
+        alphas = select_widths(spec, cfg, zp, Yp, alphas0)
+        if cfg.style == "bermudan" and cfg.exercise_rule == "pilot":
+            scale = rule_widths(cfg, alphas)
+            zp = rescale(spec, zp, alphas0, scale)
+            fits = lsm_multi(spec, cfg, zp, Wp, scale, value_function=False)[2]
+    if cfg.style == "bermudan" and cfg.exercise_rule == "pilot":
+        return alphas, scale, fits
+    return alphas, alphas, None
+
+
 def run_group(spec: PutSpec, cfg: MultiConfig, dims, seed) -> dict:
     """One run with the coordinates ``dims`` dispersed: pilot, then main (module
     doc). Returns the Greeks this group identifies and the widths it used."""
     rng = np.random.default_rng(seed)
-    alphas = fixed_widths(spec, cfg, dims)
-    scale, rules = alphas, None
-    if cfg.uses_pilot:
-        alphas0 = pilot_widths(spec, cfg, dims)
-        Np = cfg.N_pilot or cfg.N
-        zp = isd_multi(spec, cfg, alphas0, rng, Np)
-        Wp = brownian(spec, Np, rng)
-        _, Yp, fits = lsm_multi(spec, cfg, zp, Wp, alphas0,
-                                value_function=cfg.widths == "selector")
-        scale = alphas0
-        if cfg.widths == "selector":
-            alphas = select_widths(spec, cfg, zp, Yp, alphas0)
-            if cfg.style == "bermudan" and cfg.exercise_rule == "pilot":
-                scale = rule_widths(cfg, alphas)
-                zp = rescale(spec, zp, alphas0, scale)
-                fits = lsm_multi(spec, cfg, zp, Wp, scale, value_function=False)[2]
-        if cfg.style == "bermudan" and cfg.exercise_rule == "pilot":
-            rules = fits
-        else:
-            scale = alphas
-        del zp, Wp, Yp
+    alphas, scale, rules = pilot(spec, cfg, dims, rng)
     z = isd_multi(spec, cfg, alphas, rng)
     _, Y, _ = lsm_multi(spec, cfg, z, brownian(spec, cfg.N, rng), scale, rules)
     out = greeks_multi(spec, cfg, dims, z, Y, bs_put(spec) if cfg.control_variate else None)

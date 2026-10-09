@@ -34,7 +34,7 @@ settings as Table 5's σ = 20 %, T = 1 rows.
 | `simgreeks/reference.py` | Reference PDE pricer (Crank–Nicolson) for validation: price, Δ, Γ, Θ and bumped σ, r, d Greeks (not part of the paper) |
 | `simgreeks/runner.py`, `report.py` | Parallel replications; paper-style tables with † flags |
 | `experiments/run.py` | All experiments of Sections 3 and 4.1–4.3, plus the fixed-α\* diagnostic |
-| `experiments/diagnostics/` | Diagnostics of the α\* selector's M = M0 reading (see below) and of the multivariate design |
+| `experiments/diagnostics/` | Diagnostics of the α\* selector's M = M0 reading (see below), of the multivariate design and of the label price's bias |
 | `experiments/theta_check.py` | Simulated Θ vs the reference pricer's finite-difference Θ |
 | `simgreeks/multi.py` | Label generator: price and Δ, Γ, Θ, Vega, Volga, Vanna, Rho, dividend Rho by multivariate ISD (not part of the paper) |
 | `experiments/multi_check.py` | Labels vs closed form (European) and the reference pricer (American); resumable |
@@ -51,6 +51,7 @@ python experiments/run.py table5_heuristic          # placeholder alpha* on Tabl
 python experiments/theta_check.py                   # Theta vs reference pricer (≈ 5 min on 8 cores)
 python experiments/multi_check.py american european timing   # labels (≈ 2.5 h on 4 cores; resumes if interrupted)
 python experiments/diagnostics/multi_design_check.py          # exercise rule and σ design of the labels
+python experiments/diagnostics/price_bias_check.py            # why the label price is low (≈ 12 min on 4 cores)
 python experiments/diagnostics/table9_selector_trace.py
 python experiments/diagnostics/beta_scaling.py
 python experiments/diagnostics/synthetic_selector_check.py
@@ -257,7 +258,7 @@ options where |mean − ref| / (sd/√100) > 2.576):
 
 | Greek | flagged (v1) | median bias | noise of one label | flags |
 |---|---|---|---|---|
-| Price | 24 (22) | 0.1 % | < 1 % | all low: the out-of-sample rule makes the price a lower bound |
+| Price | 24 (22) | 0.1 % | < 1 % | all low: an estimated exercise rule is suboptimal, so the price is a lower bound (see below) |
 | Δ | 9 (7) | 0.2 % | 1 % | out of the money and r = d options, +0.2 to +1.5 % |
 | Γ | 3 (5) | 1.3 % | 10 % | K = 36, σ = 20 % (−1.4 %, −2.4 %); σ = 10 %, K = 40, T = 1 (−2.5 %) |
 | Θ | 3 (4) | 1.4 % | 18 % | the same options as Γ |
@@ -276,8 +277,22 @@ Open issues:
 - **r = 0.** A put is never exercised early when r ≤ 0, so the premium has a
   kink at r = 0 and the r and d windows straddle it: Rho and dividend Rho are
   biased by 2–4 % there. The paper also finds r = d = 0 the hardest case.
-- **Price** about 0.1 % low, **out-of-the-money Δ** up to +1.5 %, and **Γ, Θ**
-  1–2.5 % off on three options.
+- **Price** about 0.1 % low, a lower bound; accepted for now
+  (`results/diagnostics/price_bias`). On six of the flagged options, each run's
+  exercise rule, valued on paths that all start at z0, is below the reference:
+  −0.12 % for a rule in S alone (the paper's kind of rule) and −0.16 % for the
+  rules in (S, σ), (S, r), (S, d). So most of the shortfall is the usual
+  Longstaff–Schwartz lower bound of a rule estimated from finite data, not the
+  multivariate basis; the t = 0 regression adds nothing significant. The
+  paper's estimator shows no price bias, presumably because two upward biases
+  offset its rule's shortfall: the rule is applied to the shocks it was fitted
+  on, and V(t1) = max(Z, Ĉ). The generator removes both (they bias Volga), and
+  the offset is not reliable anyway: our replication flags the three r = d = 0
+  prices of Table 6 high (+0.1 to +0.2 %), where no early exercise is optimal
+  and only the upward biases remain. Unbiased alternatives: the PDE price (this
+  model only) or a duality upper bound (costly).
+- **Out-of-the-money Δ** up to +1.5 %, and **Γ, Θ** 1–2.5 % off on three
+  options.
 - **Volga and Vanna** are unbiased but a single label is very noisy (median
   161 % and 72 % of the Greek): a network needs many labels to learn them.
 - **Runtime.** About 7 s per one-year label on one core.
