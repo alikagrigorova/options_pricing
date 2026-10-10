@@ -312,7 +312,8 @@ Open issues:
   residual variance of Y_j (most are exercised soon, so Y_j and D_j are weakly
   correlated); removed. N_pilot = 400,000 halves the rule's shortfall
   (−0.19 % → −0.095 %, paired +0.095 ± 0.007 %) and moves the label's price
-  −0.12 % → −0.08 % (paired +0.04 ± 0.03 %, 25 reps), at 3.2× the CPU time.
+  −0.12 % → −0.08 % (paired +0.04 ± 0.03 %, 25 reps), at 3.2× the CPU time. Not adopted
+  (`results/diagnostics/price_bias/pilot_size.md`).
 - **The t1 control variate** (default on) is worth keeping. Paired check
   without it (`multi_check.py american --set control_variate=False`, 25 reps,
   `results/multi_check_american_no_cv_vs_american.md`): one label's sd is
