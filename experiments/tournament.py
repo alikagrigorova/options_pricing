@@ -56,8 +56,16 @@ from simgreeks.runner import job_seed  # noqa: E402
 S0 = 40.0
 N_OPTIONS = 2500
 INPUT_SEED = 20261011
-BASE_SEED = {"european": 8001, "american": 8002, "tournament": 8003}
-REPS = {"european": 100, "american": 50, "tournament": 1}
+BASE_SEED = {"european": 8001, "american": 8002, "tournament": 8003, "production_check": 8004}
+REPS = {"european": 100, "american": 50, "tournament": 1, "production_check": 100}
+# production check: the 33 American check options plus r0 = d0 = 1 %, K = 40, 44 (sigma 20 %, T = 1)
+EXTRA_CELLS = [(1.0, 0.20, 0.01, 0.01, 40), (1.0, 0.20, 0.01, 0.01, 44)]
+PROD_VARIANT = "D2-prod"     # MultiConfig() defaults: D2, out-of-sample rule, 100,000 paths per run
+# Extra variants, run on request (--variants) and included in the reports:
+#   D3o3-oos  : D3 with order 3 in sigma, r and d at t = 0 (instead of 2 in r, d), tournament budget
+#   D3o3-prod : the same with production settings, 100,000 main + 100,000 pilot paths per run
+ORDER3 = (("sigma", 3), ("r", 3), ("d", 3))
+EXTRA_VARIANTS = ["D3o3-oos", "D3o3-prod", PROD_VARIANT]
 VARIANTS = [f"{d}-{rule}" for d in DESIGNS for rule in ("oos", "ins")]
 EU_VARIANTS = ["D3-eu", "D4-eu"]
 INPUT_COLS = ["S0", "K", "sigma", "r", "d", "T"]
@@ -95,6 +103,8 @@ def options(part: str) -> pd.DataFrame:
         return inputs()
     from experiments.multi_check import american_grid, european_grid
     cells = european_grid() if part == "european" else american_grid()
+    if part == "production_check":
+        cells = cells + EXTRA_CELLS
     rows = [dict(id=i, S0=S0, K=float(K), sigma=s, r=r, d=d, T=T)
             for i, (T, s, r, d, K) in enumerate(cells)]
     return pd.DataFrame(rows)
@@ -106,6 +116,13 @@ def spec_of(row) -> PutSpec:
 
 
 def config_of(variant: str) -> MultiConfig:
+    if variant == PROD_VARIANT:
+        return MultiConfig()
+    if variant == "D3o3-oos":
+        # the tournament's alpha_d rule (min(0.03, r0)), so only the t = 0 order differs from D3-oos
+        return design_config("D3", "pilot", t0_max_order=ORDER3, alpha_d_shrink="r0")
+    if variant == "D3o3-prod":
+        return design_config("D3", "pilot", budget=300_000, t0_max_order=ORDER3)
     design, rule = variant.split("-")
     if rule == "eu":
         return design_config(design, style="european", control_variate=False)
@@ -118,7 +135,8 @@ def jobs_of(part: str, limit: int | None = None, variants=None):
         opts = opts.iloc[:limit]
     if part == "reference":
         return [(int(i), 0, "reference") for i in opts.id]
-    vs = variants or (EU_VARIANTS if part == "european" else VARIANTS)
+    vs = variants or (EU_VARIANTS if part == "european" else
+                      [PROD_VARIANT] if part == "production_check" else VARIANTS)
     return [(int(i), rep, v) for i in opts.id for rep in range(REPS[part]) for v in vs]
 
 
@@ -152,7 +170,7 @@ def one(part: str, opts: pd.DataFrame, job, mem: bool) -> dict:
         res = label(spec, config_of(variant), seed)
         out.update({q: float(res.get(q, np.nan)) for q in OUT_GREEKS})
         out.update({k: res.get(k, np.nan) for k in EXTRA})
-        out["design"], out["rule"] = variant.split("-")
+        out["design"], out["rule"] = variant.split("-")[0], variant.split("-")[-1]
     out["seconds"] = time.perf_counter() - t
     if mem:
         out["peak_mb"] = tracemalloc.get_traced_memory()[1] / 2 ** 20
@@ -231,7 +249,7 @@ def check_reference(part: str, out: str) -> pd.DataFrame:
 def report_check(part: str, out: str) -> str:
     """(a) flags, median / max abs(bias) %, median noise % of one label, per variant and Greek."""
     lab, ref = load(part, out), check_reference(part, out).set_index("id")
-    variants = [v for v in (EU_VARIANTS if part == "european" else VARIANTS)
+    variants = [v for v in (EU_VARIANTS if part == "european" else VARIANTS + EXTRA_VARIANTS)
                 if v in set(lab.variant)]
     lines = [f"# {part} check: {lab.groupby('variant').size().to_dict()} labels\n",
              "Per variant and Greek: options flagged (|mean - ref| / (sd / sqrt(reps)) > 2.576) / "
@@ -281,7 +299,7 @@ def report_tournament(out: str, base: str = "D2-oos") -> str:
     lab = load("tournament", out)
     ref = load("reference", out).drop_duplicates("id").set_index("id")
     opts = inputs().set_index("id")
-    variants = [v for v in VARIANTS if v in set(lab.variant)]
+    variants = [v for v in VARIANTS + EXTRA_VARIANTS if v in set(lab.variant)]
     lines = [f"# Tournament: {lab.groupby('variant').size().to_dict()} labels, "
              f"{len(ref)} reference values\n",
              "e = (label - ref) / abs(ref), over the options with abs(ref) above 1 % of the "
@@ -357,7 +375,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["run", "local", "report", "count"])
     ap.add_argument("--part", required=True,
-                    choices=["european", "american", "tournament", "reference", "timing"])
+                    choices=["european", "american", "tournament", "reference", "timing", "production_check"])
     ap.add_argument("--out", required=True)
     ap.add_argument("--task", type=int, default=0)
     ap.add_argument("--ntasks", type=int, default=1)

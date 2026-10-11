@@ -177,7 +177,7 @@ class MultiConfig:
     rd_floor: bool = False         # one-sided r, d spread [max(0, x0 - alpha), x0 + alpha] when x0 >= 0
     kink_r: bool = False           # truncated-power basis in r with a knot at r = 0 (see kink_index)
     alpha_r_shrink: bool = True    # fixed alpha_r = min(alpha_r, r0) for r0 > 0, so the window stays in r >= 0
-    alpha_d_shrink: str = "r0"     # fixed alpha_d = min(alpha_d, r0) ("r0") or min(alpha_d, d0) ("d0") when > 0; "" off
+    alpha_d_shrink: str = "d0"     # fixed alpha_d = min(alpha_d, d0) ("d0") or min(alpha_d, r0) ("r0") when > 0; "" off
     european_region: bool = True   # r0 <= 0 and d0 >= 0: exact European label (see label)
     t0_max_order: tuple = ()       # t = 0 basis: (param, max exponent) caps, e.g. (("r", 2), ("d", 2))
 

@@ -355,7 +355,7 @@ were produced with α_r = α_d = 0.02 and no shrinking or European region.
 |---|---|---|
 | α_S, α_σ | Paper's selector (Appendix A.2, M = ν + 1) on the pilot paths | Tables 4–5 reproduced with M = ν + 1 |
 | α_r, α_d (r0 ≥ 3 %) | Fixed 0.03 | Width sweep 0.01–0.10 (9 options, paired): noise ∝ 1/α, bias grows above 0.05; 0.03–0.04 gives the lowest error once labels are averaged |
-| α_r, α_d (0 < r0 < 3 %) | min(0.03, r0) (`alpha_r_shrink`, `alpha_d_shrink="r0"`) | 200-rep paired check at r0 = 0.5 %, 1 %: Rho unbiased on 9/12 options (current window: 0/12), Phi 9/12 (current 1/12); the d0 window is worse. Cost: Rho noise 11–29 % per label, Phi 13–38 % |
+| α_r, α_d (0 < r0 or d0 < 3 %) | α_r = min(0.03, r0) (`alpha_r_shrink`); α_d = min(0.03, d0) (`alpha_d_shrink="d0"`, default since the production check; the earlier evidence used min(0.03, r0)) | 200-rep paired check at r0 = 0.5 %, 1 %: Rho unbiased on 9/12 options (current window: 0/12), Phi 9/12 (current 1/12); the d0 window is worse. Cost: Rho noise 11–29 % per label, Phi 13–38 % |
 | r0 ≤ 0, d0 ≥ 0 | Exact European label (`european_region`) | No early exercise there: price, Δ, Γ, Θ, Vega match the Bermudan reference to 3 decimals; Rho, Phi are the no-exercise-side values |
 | Selector for α_r, α_d | Off | Selected widths vary ±30 % per label; Rho, Phi noise +15–23 %, no bias gain |
 | Kink basis in r (`kink_r`) | Off | No consistent bias gain, ≈2× noise, worse price and Γ |
