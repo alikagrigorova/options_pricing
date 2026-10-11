@@ -73,8 +73,9 @@ Why the pilot. Anything estimated on the same paths as the Greeks biases them:
 widths="fixed" skips the selection and uses the placeholder widths
 alpha_S = c_S S0 sigma sqrt(T), alpha_sigma = c_sigma sigma, alpha_r, alpha_d.
 
-Price, Delta and Gamma are averaged over the runs; each parameter Greek comes
-from the run that disperses its parameter; Theta follows from the PDE identity
+Price, Delta and Gamma come from the run in S alone when the design has one
+(DESIGNS D1, D3), else they are averaged over the runs; each parameter Greek
+comes from the run(s) that disperse its parameters; Theta follows from the PDE identity
 (core.theta_pde). With american_t0=True (default), an option whose continuation
 value is at or below K - S0 is exercised at t_0: price K - S0, Delta -1 and all
 other Greeks 0.
@@ -123,6 +124,20 @@ GREEKS = {
     "vera": (0, 1, 1, 0),        # d2P / dsigma dr
     "delta_r": (1, 0, 1, 0),     # d2P / dS dr
     "delta_d": (1, 0, 0, 1),     # d2P / dS dd
+    "dvega_dd": (0, 1, 0, 1),    # d2P / dsigma dd (needs sigma and d in one run)
+    "drho_dd": (0, 0, 1, 1),     # d2P / dr dd     (needs r and d in one run)
+}
+S_GREEKS = ("price", "delta", "gamma")
+
+# Label designs: the runs of one label (each run disperses S and the listed
+# parameters). With a run in S alone, price, Delta and Gamma come from it;
+# otherwise they are averaged over the runs. design_config splits a budget of
+# paths evenly over the runs.
+DESIGNS = {
+    "D1": (("S",), ("S", "sigma"), ("S", "r"), ("S", "d")),       # separate
+    "D2": (("S", "sigma"), ("S", "r"), ("S", "d")),               # current
+    "D3": (("S",), ("S", "sigma", "r"), ("S", "d")),              # partly joint
+    "D4": (("S", "sigma", "r", "d"),),                            # fully joint
 }
 OUTPUTS = tuple(GREEKS) + ("theta",)
 
@@ -164,6 +179,7 @@ class MultiConfig:
     alpha_r_shrink: bool = True    # fixed alpha_r = min(alpha_r, r0) for r0 > 0, so the window stays in r >= 0
     alpha_d_shrink: str = "r0"     # fixed alpha_d = min(alpha_d, r0) ("r0") or min(alpha_d, d0) ("d0") when > 0; "" off
     european_region: bool = True   # r0 <= 0 and d0 >= 0: exact European label (see label)
+    t0_max_order: tuple = ()       # t = 0 basis: (param, max exponent) caps, e.g. (("r", 2), ("d", 2))
 
     def __post_init__(self):
         for dims in self.groups:
@@ -565,6 +581,9 @@ def taylor_fit(spec: PutSpec, cfg: MultiConfig, z: dict, Y: np.ndarray,
     params, P, Pk = _params(spec, z, h)
     kink = kink_index(spec, cfg, params)
     terms = basis_terms(cfg.M0, len(params), cfg.weight_vf, cfg.param_degree, kink)
+    caps = dict(cfg.t0_max_order)
+    terms = [(i, a) for i, a in terms
+             if all(abs(e) <= caps.get(p, abs(e)) for p, e in zip(params, a))]
     mono, mindex = monomials(P, terms, Pk)
     A = design(np.vander((z["S"] - spec.S0) / h["S"], cfg.M0 + 1, increasing=True),
                mono, mindex)
@@ -683,11 +702,14 @@ def label(spec: PutSpec, cfg: MultiConfig, seed) -> dict:
     runs = [run_group(spec, cfg, dims, child)
             for dims, child in zip(cfg.groups, ss.spawn(len(cfg.groups)))]
     out = {}
+    s_only = [r for dims, r in zip(cfg.groups, runs) if tuple(dims) == ("S",)]
     for name in GREEKS:                # only the Greeks some group identifies
-        vals = [r[name] for r in runs if not np.isnan(r[name])]
+        src = s_only if name in S_GREEKS and s_only else runs
+        vals = [r[name] for r in src if not np.isnan(r[name])]
         if vals:
             out[name] = float(np.mean(vals))
     out["theta"], out["ex_region"] = theta_pde(spec, out["price"], out["delta"], out["gamma"])
+    out["european_region"] = False
     if cfg.american_t0 and cfg.style == "bermudan" and out["ex_region"]:
         # exercising at t_0 is optimal: V = K - S, so only Delta is non-zero
         out.update({k: 0.0 for k in OUTPUTS if k in out})
@@ -714,7 +736,21 @@ def european_label(spec: PutSpec, cfg: MultiConfig) -> dict:
     eu = bs_put(spec)
     out = {k: float(eu[k]) for k in OUTPUTS if k in eu and k != "vera"}
     out["ex_region"] = False
+    out["european_region"] = True
     for dims in cfg.groups:
         for k, v in fixed_widths(spec, cfg, dims).items():
             out[f"alpha_{k}"] = 0.0
     return out
+
+
+def design_config(design: str, exercise_rule: str = "pilot", budget: int = 400_000,
+                  **kw) -> MultiConfig:
+    """MultiConfig for a label design (DESIGNS) with ``budget`` main and
+    ``budget`` pilot paths per label, split evenly over its runs.
+    exercise_rule: "pilot" (out of sample) or "insample" (the pilot still
+    chooses the widths; the rule is fitted on the main paths)."""
+    groups = DESIGNS[design]
+    n = int(round(budget / len(groups)))
+    if design in ("D3", "D4"):          # joint runs: order 3 in sigma, 2 in r and d
+        kw.setdefault("t0_max_order", (("sigma", 3), ("r", 2), ("d", 2)))
+    return MultiConfig(groups=groups, N=n, N_pilot=n, exercise_rule=exercise_rule, **kw)

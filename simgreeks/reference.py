@@ -206,3 +206,43 @@ def bs_put(spec: PutSpec) -> dict:
                 rho=-K * T * er * norm.cdf(-d2), phi=S * T * ed * norm.cdf(-d1),
                 vanna=-ed * pdf * d2 / s, vera=-vega * d1 * sq / s, delta_r=ed * pdf * sq / s,
                 delta_d=T * ed * norm.cdf(-d1) - ed * pdf * sq / s)
+
+
+LABEL_GREEKS = ("price", "delta", "gamma", "theta", "vega", "volga", "vanna", "rho", "phi",
+                "delta_r", "delta_d", "vera")
+FORWARD_GREEKS = ("rho", "phi", "delta_r", "delta_d")
+
+
+def label_reference(spec: PutSpec, grid: FDGrid = FDGrid()) -> dict:
+    """Reference values for a label of simgreeks.multi (Bermudan, same exercise grid).
+
+    * r0 <= 0 and d0 >= 0: the closed-form European values (no early exercise is
+      optimal there; the labels use them too, MultiConfig.european_region);
+    * otherwise put_fd_greeks with central bumps, the r bump at most r0 / 2 so it
+      stays on one side of r = 0, plus forward bumps for Rho, Phi and their Delta
+      cross terms as <greek>_fwd;
+    * exercise region (immediate exercise optimal): price K - S0, Delta -1 and
+      the other Greeks 0, as in the labels (MultiConfig.american_t0).
+    Returns the LABEL_GREEKS, the <greek>_fwd values and ex_region.
+    """
+    if spec.r <= 0 and spec.d >= 0:
+        eu = bs_put(spec)
+        out = {q: float(eu[q]) for q in LABEL_GREEKS}
+        out.update({f"{q}_fwd": out[q] for q in FORWARD_GREEKS})
+        out["ex_region"] = False
+        return out
+    bumps = dict(BUMPS)
+    if spec.r > 0:
+        bumps["r"] = min(BUMPS["r"], spec.r / 2)
+    c = put_fd_greeks(spec, "bermudan", grid, bumps)
+    f = put_fd_greeks(spec, "bermudan", grid, {"r": bumps["r"], "d": bumps["d"]},
+                      one_sided=("r", "d"))
+    out = {q: float(c[q]) for q in LABEL_GREEKS}
+    out.update({f"{q}_fwd": float(f[q]) for q in FORWARD_GREEKS})
+    out["ex_region"] = bool(c["ex_region"])
+    if out["ex_region"]:
+        for q in list(out):
+            if q != "ex_region":
+                out[q] = 0.0
+        out["price"], out["delta"] = spec.K - spec.S0, -1.0
+    return out

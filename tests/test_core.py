@@ -412,3 +412,38 @@ def test_multi_alpha_d_shrink():
     assert w(PutSpec(r=0.01, d=0.005), "d0") == 0.005
     assert w(PutSpec(r=0.01, d=0.0), "d0") == 0.03      # d0 = 0: no shrink
     assert w(PutSpec(r=0.06, d=0.0), "r0") == 0.03
+
+
+def test_multi_design_configs():
+    from simgreeks.multi import DESIGNS, design_config
+    for d, groups in DESIGNS.items():
+        cfg = design_config(d)
+        assert cfg.groups == groups and cfg.N == cfg.N_pilot
+        assert abs(cfg.N * len(groups) - 400_000) <= len(groups)
+    assert design_config("D4").t0_max_order == (("sigma", 3), ("r", 2), ("d", 2))
+    assert design_config("D2").t0_max_order == ()
+    assert design_config("D1", "insample").exercise_rule == "insample"
+
+
+def test_multi_t0_max_order_caps_terms():
+    from simgreeks.multi import MultiConfig, isd_multi, taylor_fit
+    spec = PutSpec(S0=40.0, sigma=0.2, r=0.06, d=0.02)
+    z = isd_multi(spec, MultiConfig(), {"S": 5.0, "sigma": 0.05, "r": 0.03, "d": 0.03},
+                  np.random.default_rng(1), N=5000)
+    Y = np.zeros(5000)
+    full = taylor_fit(spec, MultiConfig(), z, Y)
+    capped = taylor_fit(spec, MultiConfig(t0_max_order=(("r", 2), ("d", 2))), z, Y)
+    assert len(capped.terms) < len(full.terms)
+    assert max(a[full.params.index("r")] for _, a in capped.terms) == 2
+
+
+def test_multi_s_greeks_from_the_s_run():
+    # D1 / D3: price, Delta, Gamma from the run in S alone
+    from simgreeks.multi import design_config, label, run_group
+    spec = PutSpec(K=40.0, T=0.25)
+    cfg = design_config("D1", budget=40_000)
+    seed = np.random.SeedSequence(3)
+    lab = label(spec, cfg, seed)
+    s_run = run_group(spec, cfg, ("S",), np.random.SeedSequence(3).spawn(len(cfg.groups))[0])
+    assert lab["price"] == s_run["price"] and lab["gamma"] == s_run["gamma"]
+    assert not lab["european_region"]

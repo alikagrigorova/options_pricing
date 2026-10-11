@@ -1,0 +1,20 @@
+#!/bin/bash -l
+# SGE job array for experiments/tournament.py. Submit with scc/submit.sh, which
+# sets PART, NTASKS, OUT, LIMIT, MEM, VARIANTS. One task = every NTASKS-th job
+# of the part; output is resumable, so a failed task can simply be resubmitted.
+#$ -cwd
+#$ -j y
+#$ -o logs/
+#$ -pe omp 1
+#$ -l mem_per_core=4G
+set -euo pipefail
+module load python3/3.10.12 2>/dev/null || module load python3
+source "${VENV:-$HOME/venvs/simgreeks}/bin/activate"
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
+ARGS=(run --part "$PART" --task $((SGE_TASK_ID - 1)) --ntasks "$NTASKS" --out "$OUT")
+[ -n "${LIMIT:-}" ] && ARGS+=(--limit "$LIMIT")
+[ "${MEM:-0}" = "1" ] && ARGS+=(--mem)
+[ -n "${VARIANTS:-}" ] && ARGS+=(--variants "${VARIANTS//:/,}")   # colon-separated (qsub -v splits on commas)
+echo "$(date) host $(hostname) task $SGE_TASK_ID: python experiments/tournament.py ${ARGS[*]}"
+python experiments/tournament.py "${ARGS[@]}"
+echo "$(date) done"
