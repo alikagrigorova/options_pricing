@@ -31,17 +31,19 @@ settings as Table 5's σ = 20 %, T = 1 rows.
 | `simgreeks/core.py` | ISD (eq. 23, 25), GBM paths, LSM with naive and value-function payoffs, t = 0 regression (eq. 22) |
 | `simgreeks/selector.py` | Optimal α\* selector, Appendix A.2: ROT pilot (A.2)–(A.3), local fit, plug-in (A.1) |
 | `simgreeks/methods.py` | One replication of NAIVE, NAIVE-VF, TRUNC-VF and 2STEP-VF; the 2-step second step; the α\* rule |
-| `simgreeks/reference.py` | Reference PDE pricer (Crank–Nicolson) for validation: price, Δ, Γ, Θ and bumped σ, r, d Greeks (not part of the paper) |
+| `simgreeks/reference.py` | Reference PDE pricer (Crank–Nicolson) for validation: price, Δ, Γ, Θ and bumped σ, r, d Greeks; `label_reference` for the labels (not part of the paper) |
 | `simgreeks/runner.py`, `report.py` | Parallel replications; paper-style tables with † flags |
 | `experiments/run.py` | All experiments of Sections 3 and 4.1–4.3, plus the fixed-α\* diagnostic |
 | `experiments/diagnostics/` | Diagnostics of the α\* selector's M = M0 reading (see below), of the multivariate design and of the label price's bias |
 | `experiments/theta_check.py` | Simulated Θ vs the reference pricer's finite-difference Θ |
-| `simgreeks/multi.py` | Label generator: price and Δ, Γ, Θ, Vega, Volga, Vanna, Rho, Phi (∂P/∂d, dividend Rho) by multivariate ISD (not part of the paper) |
+| `simgreeks/multi.py` | Label generator: price and Δ, Γ, Θ, Vega, Volga, Vanna, Rho, Phi (∂P/∂d, dividend Rho) and cross Greeks by multivariate ISD; label designs D1–D4 (not part of the paper) |
 | `experiments/multi_check.py` | Labels vs closed form (European) and the reference pricer (American); resumable |
 | `experiments/generate_labels.py` | A labelled data set: options drawn over K, σ, r, d, T; progress every 1 %; resumable; `--exact` adds the reference values |
 | `experiments/analyze_labels.py` | Sanity checks of a label CSV and, with reference values, the bias and noise of each Greek and where the bias is |
+| `experiments/tournament.py` | Label-design tournament: 4 designs × in/out-of-sample exercise rule; European validation, 33-option American check, 2,500-option comparison; resumable Parquet jobs |
+| `scc/` | BU SCC job arrays for the tournament: environment setup, SGE script, submit wrapper, runbook (`scc/README.md`) |
 | `data/paper_tables.csv` | Tables 1–9 of the paper (BM, estimates, std devs, † flags) |
-| `results/` | Output tables (`*.md`), figures, per-replication estimates (`raw/`), diagnostics |
+| `results/` | Output tables (`*.md`), figures, per-replication estimates (`raw/`), diagnostics (`diagnostics/r_d_windows/`: the r and d widths) |
 
 ## Running
 
@@ -56,6 +58,7 @@ python experiments/generate_labels.py --n 1000 --workers 8 --exact --out results
 python experiments/analyze_labels.py results/labels_1000.csv --plots results/labels_1000_analysis
 python experiments/diagnostics/multi_design_check.py          # exercise rule and σ design of the labels
 python experiments/diagnostics/price_bias_check.py            # why the label price is low (≈ 12 min on 4 cores)
+python experiments/tournament.py local --part european --workers 8 --out OUT   # label designs; see scc/README.md for the SCC
 python experiments/diagnostics/table9_selector_trace.py
 python experiments/diagnostics/beta_scaling.py
 python experiments/diagnostics/synthetic_selector_check.py
@@ -208,7 +211,8 @@ from simgreeks.core import PutSpec
 from simgreeks.multi import MultiConfig, label
 label(PutSpec(S0=40, K=40, sigma=0.2, r=0.06, d=0.0, T=1.0), MultiConfig(), seed=1)
 # -> price, delta, gamma, theta, vega, volga, vanna, rho, phi (dP/dd, dividend Rho),
-#    delta_r, delta_d, ex_region, alpha_S, alpha_sigma, alpha_r, alpha_d
+#    delta_r, delta_d, ex_region, european_region, alpha_S, alpha_sigma, alpha_r, alpha_d
+#    (with a joint design, also vera, dvega_dd, drho_dd; see "Label designs" below)
 ```
 
 Only the moneyness S0/K matters: a label at (λS0, λK) equals the label at
@@ -224,11 +228,12 @@ in S and the dispersed parameters, and the t = 0 regression is a multivariate
 Taylor polynomial in (S − S0, σ − σ0, r − r0, d − d0): the coefficient c of
 x_S^i x_σ^a x_r^b x_d^e gives ∂^(i+a+b+e)P / ∂S^i ∂σ^a ∂r^b ∂d^e = i! a! b! e! c.
 
-A label combines three independent runs, (S, σ), (S, r) and (S, d), each in
-two phases on independent paths:
+By default (design D2) a label combines three independent runs, (S, σ), (S, r)
+and (S, d), each in two phases on independent paths:
 
 1. **Pilot** (100,000 paths). S and σ are dispersed widely (α0_S = 0.25 S0, the
-   paper's α = 10 at S0 = 40; α0_σ = 0.6 σ), r or d by 1.3 × 0.02. The paper's
+   paper's α = 10 at S0 = 40; α0_σ = 0.6 σ), r or d by 1.3 × their fixed width
+   (0.03, or min(0.03, r0) for 0 < r0 < 0.03; see the defaults below). The paper's
    selector (M = ν + 1) on the pilot's partial residuals chooses α_S\*
    (target: Gamma) and α_σ\* (target: Volga). The pilot's starting points are
    then rescaled to the chosen widths, as in the paper's 2-step method (exact,
@@ -242,8 +247,9 @@ Price, Δ and Γ are averaged over the three runs; Vega, Volga and Vanna come fr
 the (S, σ) run, Rho from (S, r), Phi from (S, d); Θ follows from the
 PDE identity. When exercising at t0 is optimal (the estimated continuation
 value is at or below K − S0), the label is exact: price K − S0, Δ = −1, all
-other Greeks 0. Vera (∂²P/∂σ∂r) is available by adding the group (S, σ, r),
-at about 40 % more time per label.
+other Greeks 0. When r0 ≤ 0 and d0 ≥ 0 the label is the exact European one
+(no early exercise is optimal). Vera (∂²P/∂σ∂r) needs σ and r in one run:
+designs D3 and D4 below.
 
 Each design choice fixes a bias found in the checks:
 
@@ -257,7 +263,8 @@ Each design choice fixes a bias found in the checks:
 | Exercise at t1 by the rule, not max(Z, Ĉ) | The max turns the fit's estimation error into an upward bias, convex in σ: Volga +34 % at K = 44, σ = 20 %, T = 1 (−> +1 %) | quick checks |
 
 Checks (`experiments/multi_check.py`, 100 replications per option; † counts
-options where |mean − ref| / (sd/√100) > 2.576):
+options where |mean − ref| / (sd/√100) > 2.576). These were run before the
+October defaults, with α_r = α_d = 0.02 and no European region:
 
 - **European** (no early exercise, no control variate), 6 options against the
   closed form: **0 of 66** estimates flagged (`results/multi_check_european.md`).
@@ -287,9 +294,11 @@ once a one-year label took 4.5 s each, with 8 at once 7.7 s each, i.e. 2.9× and
 cores).
 
 Open issues:
-- **r = 0.** A put is never exercised early when r ≤ 0, so the premium has a
-  kink at r = 0 and the r and d windows straddle it: Rho and Phi are
-  biased by 2–4 % there. The paper also finds r = d = 0 the hardest case.
+- **r = 0** (resolved by the October defaults below). A put is never
+  exercised early when r ≤ 0, so the premium has a kink at r = 0 and the r and
+  d windows straddled it: Rho and Phi were biased by 2–4 % there. The paper
+  also finds r = d = 0 the hardest case. Now: exact European labels at r0 ≤ 0,
+  d0 ≥ 0, and windows that shrink to r0 for 0 < r0 < 0.03.
 - **Price** about 0.1 % low, a lower bound; accepted for now
   (`results/diagnostics/price_bias`). On six of the flagged options, each run's
   exercise rule, valued on paths that all start at z0, is below the reference:
@@ -370,6 +379,36 @@ Open issues:
   0.04–0.10 percentage points at small r0.
 - Labels are Bermudan (exercise on 50 dates per year), 0.2–0.3 % below American
   values.
+
+### Label designs and the tournament (in progress)
+
+`simgreeks.multi.DESIGNS` defines four ways to split a label into runs, and
+`design_config(design, rule)` gives each the same budget of 400,000 main +
+400,000 pilot paths per label, split evenly over its runs:
+
+| Design | Runs | Greeks |
+|---|---|---|
+| D1 separate | (S); (S, σ); (S, r); (S, d) | price, Δ, Γ, Θ from (S); Vega, Volga, Vanna; Rho, ∂Δ/∂r; Phi, ∂Δ/∂d |
+| D2 current (default `MultiConfig`) | (S, σ); (S, r); (S, d) | price, Δ, Γ averaged over the runs |
+| D3 partly joint | (S); (S, σ, r); (S, d) | adds Vera (∂²P/∂σ∂r) |
+| D4 fully joint | (S, σ, r, d) | all Greeks and cross terms (Vera, ∂²P/∂σ∂d, ∂²P/∂r∂d) |
+
+With a run in S alone (D1, D3), price, Δ and Γ come from it. For the joint runs
+(D3, D4) the t = 0 polynomial has order 9 in S, at most 3 in σ and 2 in r and d,
+with the cross terms (`MultiConfig.t0_max_order`). Each design runs with the
+exercise rule fitted out of sample on the pilot paths (default) or in sample on
+the main paths (`exercise_rule="insample"`; the pilot still chooses the widths).
+One label at T = 1 on a 4-core test machine: D1 13 s, D2 15 s, D3 18 s, D4 67 s
+(peak 1.4 GB).
+
+`experiments/tournament.py` compares the 8 variants with paired seeds: a
+European validation of D3 and D4 (6 options × 100 reps), the 33-option American
+check (50 reps) and 2,500 options drawn over S0/K ∈ [0.85, 1.20], σ, T, d and r
+(25 % in (0, 0.03), 2 % at r = 0; r rounded to 0.25 % steps so that
+α_r = min(0.03, r0) ≥ 0.0025) against `reference.label_reference` (central
+bumps with the r bump ≤ r0/2, forward bumps for Rho and Phi, European values at
+r0 ≤ 0, d0 ≥ 0). It runs as SGE job arrays on the BU SCC (`scc/README.md`).
+Results will be added here.
 
 ## Choices the paper leaves open
 

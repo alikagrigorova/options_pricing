@@ -2,6 +2,14 @@
 
 A plain-language overview. The README has the details and the evidence.
 
+> **Update (11 Oct 2026).** Since this summary was written: r = 0 is handled
+> (exact European labels at r ≤ 0, d ≥ 0; r and d windows of 0.03 that shrink
+> to r0 for 0 < r0 < 3 %, removing most of the small-r Rho/Phi bias; one open
+> case at r0 = d0 = 1 %), and four label designs (D1–D4, separate to fully
+> joint, with Vera from the joint ones) are being compared in a tournament on
+> the BU SCC (`experiments/tournament.py`, `scc/README.md`). See the README
+> sections "Label generator defaults" and "Label designs and the tournament".
+
 ## 1. What the project is
 
 Two things built on one method:
@@ -147,8 +155,8 @@ one. For Γ the ratio is 0.07, negligible.
 4. **In Black–Scholes only**: the PDE pricer is exact *and* faster
    (0.1–1.5 s vs 3.3 s). See section 6.
 
-**Other known weak points:** r = 0 (Rho, Phi biased 2–4 %; the early
-exercise premium has a kink there), and heavy-tailed errors: 8–24 % of
+**Other known weak points:** r = 0 (Rho, Phi were biased 2–4 %; the early
+exercise premium has a kink there; now handled, see the update above), and heavy-tailed errors: 8–24 % of
 labels lie beyond 3× the typical error (≈ 0.3 % if the noise were normal).
 For a network the outliers probably hurt more than the bias.
 
@@ -182,7 +190,8 @@ Still missing:
 - price, Δ, Γ, Θ, Vega, Rho, Phi as main targets;
 - Volga, Vanna, ∂Δ/∂r, ∂Δ/∂d with a low weight (noisy);
 - a robust loss (e.g. Huber) because of the heavy tails;
-- r = 0 avoided or treated carefully.
+- r = 0 handled by the October defaults (exact European labels at r ≤ 0,
+  shrinking r and d windows for small r > 0, with noisier Rho/Phi there).
 
 **Not yet** for production pricing or hedging, and not outside the range.
 
@@ -205,7 +214,8 @@ answer is known.
    100-replication checks at the edges.
 4. Handle the heavy tails: understand the outliers (often near-zero
    Greeks), or use a robust loss.
-5. Fix or exclude r = 0.
+5. ~~Fix or exclude r = 0.~~ Done (October defaults). Next: the label-design
+   tournament (D1–D4 × in/out-of-sample rule) on the SCC, then production.
 6. Generate a large training set (tens of thousands of labels; at 3.3 s per
    label, 50,000 labels take about 13 hours with 8 processes on an M3), train the network,
    and compare it with the PDE on a held-out set.
