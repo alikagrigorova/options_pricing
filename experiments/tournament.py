@@ -56,8 +56,9 @@ from simgreeks.runner import job_seed  # noqa: E402
 S0 = 40.0
 N_OPTIONS = 2500
 INPUT_SEED = 20261011
-BASE_SEED = {"european": 8001, "american": 8002, "tournament": 8003, "production_check": 8004}
-REPS = {"european": 100, "american": 50, "tournament": 1, "production_check": 100}
+BASE_SEED = {"european": 8001, "american": 8002, "tournament": 8003, "production_check": 8004,
+             "production_avg": 8005}
+REPS = {"european": 100, "american": 50, "tournament": 1, "production_check": 100, "production_avg": 100}
 # production check: the 33 American check options plus r0 = d0 = 1 %, K = 40, 44 (sigma 20 %, T = 1)
 EXTRA_CELLS = [(1.0, 0.20, 0.01, 0.01, 40), (1.0, 0.20, 0.01, 0.01, 44)]
 PROD_VARIANT = "D2-prod"     # MultiConfig() defaults: D2, out-of-sample rule, 100,000 paths per run
@@ -65,7 +66,9 @@ PROD_VARIANT = "D2-prod"     # MultiConfig() defaults: D2, out-of-sample rule, 1
 #   D3o3-oos  : D3 with order 3 in sigma, r and d at t = 0 (instead of 2 in r, d), tournament budget
 #   D3o3-prod : the same with production settings, 100,000 main + 100,000 pilot paths per run
 ORDER3 = (("sigma", 3), ("r", 3), ("d", 3))
-EXTRA_VARIANTS = ["D3o3-oos", "D3o3-prod", PROD_VARIANT]
+#   D2-avg    : D2-prod plus the in-sample label on the same main paths; stores the
+#               out-of-sample label (plain columns), <greek>_ins and <greek>_avg
+EXTRA_VARIANTS = ["D3o3-oos", "D3o3-prod", PROD_VARIANT, "D2-avg"]
 VARIANTS = [f"{d}-{rule}" for d in DESIGNS for rule in ("oos", "ins")]
 EU_VARIANTS = ["D3-eu", "D4-eu"]
 INPUT_COLS = ["S0", "K", "sigma", "r", "d", "T"]
@@ -103,7 +106,7 @@ def options(part: str) -> pd.DataFrame:
         return inputs()
     from experiments.multi_check import american_grid, european_grid
     cells = european_grid() if part == "european" else american_grid()
-    if part == "production_check":
+    if part in ("production_check", "production_avg"):
         cells = cells + EXTRA_CELLS
     rows = [dict(id=i, S0=S0, K=float(K), sigma=s, r=r, d=d, T=T)
             for i, (T, s, r, d, K) in enumerate(cells)]
@@ -118,6 +121,8 @@ def spec_of(row) -> PutSpec:
 def config_of(variant: str) -> MultiConfig:
     if variant == PROD_VARIANT:
         return MultiConfig()
+    if variant == "D2-avg":
+        return MultiConfig(insample_too=True)
     if variant == "D3o3-oos":
         # the tournament's alpha_d rule (min(0.03, r0)), so only the t = 0 order differs from D3-oos
         return design_config("D3", "pilot", t0_max_order=ORDER3, alpha_d_shrink="r0")
@@ -136,7 +141,8 @@ def jobs_of(part: str, limit: int | None = None, variants=None):
     if part == "reference":
         return [(int(i), 0, "reference") for i in opts.id]
     vs = variants or (EU_VARIANTS if part == "european" else
-                      [PROD_VARIANT] if part == "production_check" else VARIANTS)
+                      [PROD_VARIANT] if part == "production_check" else
+                      ["D2-avg"] if part == "production_avg" else VARIANTS)
     return [(int(i), rep, v) for i in opts.id for rep in range(REPS[part]) for v in vs]
 
 
@@ -170,6 +176,7 @@ def one(part: str, opts: pd.DataFrame, job, mem: bool) -> dict:
         res = label(spec, config_of(variant), seed)
         out.update({q: float(res.get(q, np.nan)) for q in OUT_GREEKS})
         out.update({k: res.get(k, np.nan) for k in EXTRA})
+        out.update({k: v for k, v in res.items() if k.endswith(("_ins", "_avg"))})
         out["design"], out["rule"] = variant.split("-")[0], variant.split("-")[-1]
     out["seconds"] = time.perf_counter() - t
     if mem:
@@ -375,7 +382,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["run", "local", "report", "count"])
     ap.add_argument("--part", required=True,
-                    choices=["european", "american", "tournament", "reference", "timing", "production_check"])
+                    choices=["european", "american", "tournament", "reference", "timing", "production_check", "production_avg"])
     ap.add_argument("--out", required=True)
     ap.add_argument("--task", type=int, default=0)
     ap.add_argument("--ntasks", type=int, default=1)

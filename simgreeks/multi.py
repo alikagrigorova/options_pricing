@@ -180,6 +180,7 @@ class MultiConfig:
     alpha_d_shrink: str = "d0"     # fixed alpha_d = min(alpha_d, d0) ("d0") or min(alpha_d, r0) ("r0") when > 0; "" off
     european_region: bool = True   # r0 <= 0 and d0 >= 0: exact European label (see label)
     t0_max_order: tuple = ()       # t = 0 basis: (param, max exponent) caps, e.g. (("r", 2), ("d", 2))
+    insample_too: bool = False     # also the in-sample label on the same main paths (<greek>_ins, <greek>_avg)
 
     def __post_init__(self):
         for dims in self.groups:
@@ -685,8 +686,15 @@ def run_group(spec: PutSpec, cfg: MultiConfig, dims, seed) -> dict:
     rng = np.random.default_rng(seed)
     alphas, scale, rules = pilot(spec, cfg, dims, rng)
     z = isd_multi(spec, cfg, alphas, rng)
-    _, Y, _ = lsm_multi(spec, cfg, z, brownian(spec, cfg.N, rng), scale, rules)
-    out = greeks_multi(spec, cfg, dims, z, Y, bs_put(spec) if cfg.control_variate else None)
+    W = brownian(spec, cfg.N, rng)
+    _, Y, _ = lsm_multi(spec, cfg, z, W, scale, rules)
+    add = bs_put(spec) if cfg.control_variate else None
+    out = greeks_multi(spec, cfg, dims, z, Y, add)
+    if cfg.insample_too and cfg.style == "bermudan" and rules is not None:
+        # the in-sample label: the exercise rule refitted on these main paths and
+        # applied to them (no random numbers used, so the label above is unchanged)
+        _, Y_ins, _ = lsm_multi(spec, cfg, z, W, alphas, None)
+        out["ins"] = greeks_multi(spec, cfg, dims, z, Y_ins, add)
     out.update({f"alpha_{k}": float(v) for k, v in alphas.items()})
     return out
 
@@ -701,6 +709,21 @@ def label(spec: PutSpec, cfg: MultiConfig, seed) -> dict:
     ss = seed if isinstance(seed, np.random.SeedSequence) else np.random.SeedSequence(seed)
     runs = [run_group(spec, cfg, dims, child)
             for dims, child in zip(cfg.groups, ss.spawn(len(cfg.groups)))]
+    out = _assemble(spec, cfg, runs)
+    if cfg.insample_too and all("ins" in r for r in runs):
+        ins = _assemble(spec, cfg, [r["ins"] for r in runs])
+        _add_ins_avg(out, ins)
+    for k in DIMS:
+        vals = [r[f"alpha_{k}"] for r in runs if f"alpha_{k}" in r]
+        if vals:
+            out[f"alpha_{k}"] = float(np.mean(vals))
+    return out
+
+
+def _assemble(spec: PutSpec, cfg: MultiConfig, runs) -> dict:
+    """Label from the runs' Greeks: price, Delta, Gamma from the run in S alone if
+    any, else averaged; the others from the runs that identify them; Theta from
+    the PDE identity; exercise values when exercising at t_0 is optimal."""
     out = {}
     s_only = [r for dims, r in zip(cfg.groups, runs) if tuple(dims) == ("S",)]
     for name in GREEKS:                # only the Greeks some group identifies
@@ -714,11 +737,18 @@ def label(spec: PutSpec, cfg: MultiConfig, seed) -> dict:
         # exercising at t_0 is optimal: V = K - S, so only Delta is non-zero
         out.update({k: 0.0 for k in OUTPUTS if k in out})
         out["price"], out["delta"] = spec.K - spec.S0, -1.0
-    for k in DIMS:
-        vals = [r[f"alpha_{k}"] for r in runs if f"alpha_{k}" in r]
-        if vals:
-            out[f"alpha_{k}"] = float(np.mean(vals))
     return out
+
+
+def _add_ins_avg(out: dict, ins: dict) -> None:
+    """Add the in-sample label as <greek>_ins and the average of the out-of-sample
+    and in-sample labels as <greek>_avg (MultiConfig.insample_too). The plain
+    keys stay the out-of-sample label."""
+    for k in OUTPUTS:
+        if k in out and k in ins:
+            out[f"{k}_ins"] = ins[k]
+            out[f"{k}_avg"] = 0.5 * (out[k] + ins[k])
+    out["ex_region_ins"] = ins["ex_region"]
 
 
 def european_label(spec: PutSpec, cfg: MultiConfig) -> dict:
@@ -737,6 +767,8 @@ def european_label(spec: PutSpec, cfg: MultiConfig) -> dict:
     out = {k: float(eu[k]) for k in OUTPUTS if k in eu and k != "vera"}
     out["ex_region"] = False
     out["european_region"] = True
+    if cfg.insample_too:               # exact: the in-sample and average labels are the same
+        _add_ins_avg(out, dict(out))
     for dims in cfg.groups:
         for k, v in fixed_widths(spec, cfg, dims).items():
             out[f"alpha_{k}"] = 0.0

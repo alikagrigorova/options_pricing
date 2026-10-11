@@ -447,3 +447,17 @@ def test_multi_s_greeks_from_the_s_run():
     s_run = run_group(spec, cfg, ("S",), np.random.SeedSequence(3).spawn(len(cfg.groups))[0])
     assert lab["price"] == s_run["price"] and lab["gamma"] == s_run["gamma"]
     assert not lab["european_region"]
+
+
+def test_multi_insample_too_keeps_the_oos_label():
+    # D2-avg: the plain keys are the out-of-sample label, identical to MultiConfig();
+    # <greek>_avg is the mean of the out-of-sample and in-sample labels
+    from simgreeks.multi import MultiConfig, label
+    spec = PutSpec(K=40.0, sigma=0.2, T=0.25, r=0.06, d=0.0)
+    base = label(spec, MultiConfig(N=20_000), np.random.SeedSequence(11))
+    both = label(spec, MultiConfig(N=20_000, insample_too=True), np.random.SeedSequence(11))
+    for q in ("price", "delta", "gamma", "vega", "rho", "phi"):
+        assert both[q] == base[q]
+        assert np.isclose(both[f"{q}_avg"], 0.5 * (both[q] + both[f"{q}_ins"]))
+    eu = label(PutSpec(r=0.0, d=0.01), MultiConfig(insample_too=True), 1)
+    assert eu["price_ins"] == eu["price_avg"] == eu["price"]
