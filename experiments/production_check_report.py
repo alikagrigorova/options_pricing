@@ -60,8 +60,11 @@ def per_option(lab: pd.DataFrame, ref: pd.DataFrame, key="id") -> pd.DataFrame:
             r = float(ref.loc[i, q])
             n, m, sd = len(x), x.mean(), x.std(ddof=1)
             b = m - r
+            exact = sd <= 1e-9 * max(1.0, abs(r))      # exact labels (European region): rounding only
+            if exact:
+                sd = 0.0
             se = sd / np.sqrt(n)
-            t = b / se if se > 0 else (0.0 if abs(b) < 1e-12 else np.inf)
+            t = b / se if se > 0 else (0.0 if abs(b) <= 1e-9 * max(1.0, abs(r)) else np.inf)
             rows.append(dict(id=i, greek=q, n=n, ref=r, mean=m, bias=b, se=se, t=t, sd=sd))
     df = pd.DataFrame(rows)
     big = df.groupby("greek").ref.transform(lambda s: s.abs().max())
