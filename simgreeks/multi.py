@@ -43,16 +43,17 @@ with the terms i + weight |a| <= M and |a| <= param_degree.
 
 Each run has two phases on independent paths:
 
-  1. Pilot (N_pilot paths). The coordinates in MultiConfig.select (S and
-     sigma) are dispersed widely: alpha0_S = c0_S S0 (the paper's alpha = 10
-     at S0 = 40) and alpha0_sigma = c0_sigma sigma; the others by pilot_widen
-     times their fixed width. The pilot
+  1. Pilot (N_pilot paths). The coordinates in MultiConfig.select (default S
+     and sigma; r and d optional) are dispersed widely: alpha0_S = c0_S S0 (the
+     paper's alpha = 10 at S0 = 40), alpha0_sigma = c0_sigma sigma, alpha0_r,
+     alpha0_d; the others by pilot_widen times their fixed width. The pilot
        * fits the exercise rule (exercise_rule="pilot"), and
        * chooses each selected width with the paper's selector (Appendix A.2,
          local order M = nu + 1, see methods.SELECTOR_ORDERS) applied to the
          pilot's partial residuals for that coordinate, i.e. the label minus
          the Taylor terms of the other coordinates. The target derivative is
-         the Gamma for S (nu = 2) and the Volga for sigma (nu = 2).
+         the Gamma for S (nu = 2), the Volga for sigma (nu = 2) and, when
+         selected, Rho and Phi for r and d (nu = nu_rd = 1).
   2. Main (N paths). The coordinates are dispersed with the chosen widths, the
      pilot's exercise rule is applied, and the Taylor regression gives the
      Greeks.
@@ -104,6 +105,7 @@ VF_RULES = ("max", "rule")
 PARAM_KERNELS = ("uniform", "epanechnikov")
 WIDTHS = ("selector", "fixed")
 NU = {"S": 2, "sigma": 2}          # derivative each selected width is optimised for
+#                                    (r, d: MultiConfig.nu_rd)
 GROUPS = (("S", "sigma"), ("S", "r"), ("S", "d"))
 # Vera (d2P / dsigma dr) needs sigma and r in one run: add the group
 # ("S", "sigma", "r"), which takes about 40 % of the time of a 4-run label.
@@ -134,10 +136,14 @@ class MultiConfig:
     select: tuple = ("S", "sigma")  # coordinates whose width the selector chooses
     c0_S: float = 0.25             # pilot alpha0_S = c0_S S0
     c0_sigma: float = 0.6          # pilot alpha0_sigma = c0_sigma sigma
+    alpha0_r: float = 0.05         # pilot alpha0_r (when "r" in select)
+    alpha0_d: float = 0.05         # pilot alpha0_d (when "d" in select)
+    nu_rd: int = 1                 # derivative the r and d widths are optimised for (Rho, Phi)
+    rd_unit: str = "pilot"         # selector units for r, d: "pilot" (alpha0 -> S_REF / 4) or "raw"
     c_S: float = 0.6               # fixed alpha_S = c_S S0 sigma sqrt(T)   (placeholder)
     c_sigma: float = 0.25          # fixed alpha_sigma = c_sigma sigma      (placeholder)
-    alpha_r: float = 0.02          # fixed alpha_r                          (placeholder)
-    alpha_d: float = 0.02          # fixed alpha_d                          (placeholder)
+    alpha_r: float = 0.03          # fixed alpha_r (width sweep: 0.03-0.04 best when labels are averaged)
+    alpha_d: float = 0.03          # fixed alpha_d (same)
     param_kernel: str = "uniform"  # ISD map of sigma, r, d (S keeps eq. 25's Epanechnikov)
     # pilot
     exercise_rule: str = "pilot"   # "pilot": fitted on the pilot paths; "insample"
@@ -153,6 +159,11 @@ class MultiConfig:
     control_variate: bool = True   # European control variate (see module doc)
     vf_rule: str = "rule"          # V(t_1) by the exercise rule (default) or max(Z, C_1); see lsm_multi
     american_t0: bool = True       # exercise at t_0 when optimal (bermudan only)
+    rd_floor: bool = False         # one-sided r, d spread [max(0, x0 - alpha), x0 + alpha] when x0 >= 0
+    kink_r: bool = False           # truncated-power basis in r with a knot at r = 0 (see kink_index)
+    alpha_r_shrink: bool = True    # fixed alpha_r = min(alpha_r, r0) for r0 > 0, so the window stays in r >= 0
+    alpha_d_shrink: str = "r0"     # fixed alpha_d = min(alpha_d, r0) ("r0") or min(alpha_d, d0) ("d0") when > 0; "" off
+    european_region: bool = True   # r0 <= 0 and d0 >= 0: exact European label (see label)
 
     def __post_init__(self):
         for dims in self.groups:
@@ -165,8 +176,12 @@ class MultiConfig:
                                      ("vf_rule", self.vf_rule, VF_RULES)):
             if value not in allowed:
                 raise ValueError(f"unknown {name} {value!r}")
-        if not set(self.select) <= set(NU):
-            raise ValueError(f"select must be a subset of {tuple(NU)}")
+        if not set(self.select) <= set(DIMS):
+            raise ValueError(f"select must be a subset of {DIMS}")
+        if self.alpha_d_shrink not in ("", "r0", "d0"):
+            raise ValueError(f"unknown alpha_d_shrink {self.alpha_d_shrink!r}")
+        if self.rd_unit not in ("pilot", "raw"):
+            raise ValueError(f"unknown rd_unit {self.rd_unit!r}")
         if self.pilot_widen < 1:
             raise ValueError("pilot_widen must be >= 1")
         if not 0 < self.c0_sigma < 1 or not 0 < self.c_sigma * self.pilot_widen < 1:
@@ -205,8 +220,11 @@ def _center(spec: PutSpec) -> dict:
 # --------------------------------------------------------------------------
 def fixed_widths(spec: PutSpec, cfg: MultiConfig, dims) -> dict:
     """Placeholder widths alpha_k (see MultiConfig)."""
+    a_r = min(cfg.alpha_r, spec.r) if cfg.alpha_r_shrink and spec.r > 0 else cfg.alpha_r
+    x = {"r0": spec.r, "d0": spec.d}.get(cfg.alpha_d_shrink, 0.0)
+    a_d = min(cfg.alpha_d, x) if x > 0 else cfg.alpha_d
     a = {"S": min(cfg.c_S * spec.S0 * spec.sigma * np.sqrt(spec.T), ALPHA_CAP * spec.S0),
-         "sigma": cfg.c_sigma * spec.sigma, "r": cfg.alpha_r, "d": cfg.alpha_d}
+         "sigma": cfg.c_sigma * spec.sigma, "r": a_r, "d": a_d}
     return {k: a[k] for k in DIMS if k in dims}
 
 
@@ -217,7 +235,8 @@ def _selected(cfg: MultiConfig, dims) -> list:
 def pilot_widths(spec: PutSpec, cfg: MultiConfig, dims) -> dict:
     """Pilot widths: alpha0 for the selected coordinates, the fixed widths
     otherwise (parameters widened by pilot_widen; S diffuses and is not)."""
-    a0 = {"S": cfg.c0_S * spec.S0, "sigma": cfg.c0_sigma * spec.sigma}
+    a0 = {"S": cfg.c0_S * spec.S0, "sigma": cfg.c0_sigma * spec.sigma,
+          "r": cfg.alpha0_r, "d": cfg.alpha0_d}
     out = {}
     for k, a in fixed_widths(spec, cfg, dims).items():
         if k in _selected(cfg, dims):
@@ -245,12 +264,28 @@ def select_widths(spec: PutSpec, cfg: MultiConfig, z: dict, Y: np.ndarray,
     center = _center(spec)
     for k in selected:
         kernel = "epanechnikov" if k == "S" else cfg.param_kernel
-        a = select_alpha(z[k], partial_residual(fit, Y, k), center[k], alphas0[k], kernel,
-                         M=NU[k] + 1, nu=NU[k],
-                         x_unit=spec.S0 / S_REF if k == "S" else 1.0)["alpha_star"]
+        nu = NU.get(k, cfg.nu_rd)
+        sel = select_alpha(z[k], partial_residual(fit, Y, k), center[k], alphas0[k], kernel,
+                           M=nu + 1, nu=nu, x_unit=_x_unit(spec, cfg, k, alphas0[k]))
+        # the selector's own cap 0.75 x0 keeps S and sigma positive; r and d may
+        # be 0 or negative, so they take the uncapped value and only the cap below
+        a = sel["alpha_raw"] if k in ("r", "d") else sel["alpha_star"]
         cap = min(alphas0[k], ALPHA_CAP * spec.S0) if k == "S" else alphas0[k] / cfg.pilot_widen
         out[k] = float(min(a, cap))
     return out
+
+
+def _x_unit(spec: PutSpec, cfg: MultiConfig, k: str, alpha0: float) -> float:
+    """Units the selector runs in for coordinate k (selector module doc: the
+    printed (A.3) is not unit-free, so h_ROT depends on them). S: the stock
+    starts at S_REF. sigma: as is. r, d (rd_unit="pilot"): the pilot width maps
+    to the stock's pilot width at S_REF, c0_S S_REF (= 10, the paper's alpha);
+    rd_unit="raw": as is."""
+    if k == "S":
+        return spec.S0 / S_REF
+    if k in ("r", "d") and cfg.rd_unit == "pilot":
+        return alpha0 / (cfg.c0_S * S_REF)
+    return 1.0
 
 
 def rule_widths(cfg: MultiConfig, alphas: dict) -> dict:
@@ -289,8 +324,20 @@ def isd_multi(spec: PutSpec, cfg: MultiConfig, alphas: dict, rng: np.random.Gene
     z = {k: np.full(N, v) for k, v in center.items()}
     for col, (k, a) in enumerate(alphas.items()):
         kernel = "epanechnikov" if k == "S" else cfg.param_kernel
-        z[k] = center[k] + a * isd_kernel(U[:, col], kernel)
+        u = isd_kernel(U[:, col], kernel)                 # in [-1, 1]
+        lo, hi = spread_bounds(cfg, k, center[k], a)
+        z[k] = center[k] + a * u if lo == center[k] - a else lo + (hi - lo) * (u + 1) / 2
     return z
+
+
+def spread_bounds(cfg: MultiConfig, k: str, x0: float, a: float) -> tuple:
+    """Interval [lo, hi] the coordinate k is dispersed over: [x0 - a, x0 + a],
+    or with cfg.rd_floor the one-sided [max(0, x0 - a), x0 + a] for r and d when
+    x0 >= 0, so that no path has a negative rate or dividend yield. The Taylor
+    polynomial stays centred at x0."""
+    if cfg.rd_floor and k in ("r", "d") and x0 >= 0:
+        return max(0.0, x0 - a), x0 + a
+    return x0 - a, x0 + a
 
 
 def brownian(spec: PutSpec, N: int, rng: np.random.Generator) -> np.ndarray:
@@ -316,23 +363,39 @@ def european_put(S, K, tau, sigma, r, d):
 # --------------------------------------------------------------------------
 # Bases: (S-part of order <= M) x (parameter monomials of degree <= param_degree)
 # --------------------------------------------------------------------------
-def basis_terms(M: int, n_params: int, weight: int, param_degree: int):
-    """Multi-indices (i, a) with i + weight |a| <= M and |a| <= param_degree."""
+def basis_terms(M: int, n_params: int, weight: int, param_degree: int, kink: int | None = None):
+    """Multi-indices (i, a) with i + weight |a| <= M and |a| <= param_degree,
+    |a| = sum_k |a_k|.
+
+    kink: index of a parameter (r) that takes a truncated-power basis with a
+    knot at 0 instead of monomials: exponents 0 and 1 of (x - x0) and -1, -2,
+    -3 for (x)_+, (x)_+^2, (x)_+^3 (degree |a_k|); see monomials and kink_index."""
+    def exps(k, deg):
+        if k == kink:
+            return [e for e in (0, 1, -1, -2, -3) if abs(e) <= deg]
+        return range(deg + 1)
     terms = []
     for deg in range(min(param_degree, M // weight) + 1):
-        for a in itertools.product(range(deg + 1), repeat=n_params):
-            if sum(a) == deg:
+        for a in itertools.product(*[exps(k, deg) for k in range(n_params)]):
+            if sum(abs(e) for e in a) == deg:
                 terms += [(i, a) for i in range(M - weight * deg + 1)]
     return terms
 
 
-def monomials(P: np.ndarray, terms) -> tuple[np.ndarray, list]:
+def monomials(P: np.ndarray, terms, Pk: np.ndarray | None = None) -> tuple[np.ndarray, list]:
     """Parameter monomials prod_k P[:, k]^a_k for the distinct a in terms, as
-    columns (Fortran order), and the (i, column) of each term."""
+    columns (Fortran order), and the (i, column) of each term. A negative a_k
+    stands for Pk[:, k]^|a_k| (truncated powers, basis_terms' kink)."""
     exps = list(dict.fromkeys(a for _, a in terms))
     mono = np.empty((P.shape[0], len(exps)), order="F")
     for m, a in enumerate(exps):
-        mono[:, m] = np.prod(P ** np.array(a), axis=1) if len(a) else 1.0
+        col = np.ones(P.shape[0])
+        for k, e in enumerate(a):
+            if e > 0:
+                col = col * P[:, k] ** e
+            elif e < 0:
+                col = col * Pk[:, k] ** -e
+        mono[:, m] = col
     col = {a: m for m, a in enumerate(exps)}
     return mono, [(i, col[a]) for i, a in terms]
 
@@ -380,12 +443,28 @@ def _predict(fit, S, mono, index, M):
 
 def _params(spec, z, scale):
     """The dispersed parameters (the keys of scale besides S), centred and
-    divided by scale[k], in PARAMS order."""
+    divided by scale[k], in PARAMS order; and Pk, the truncated powers' base
+    max(z_k, 0) / scale[k] (used by a kink basis)."""
     center = _center(spec)
     params = [k for k in PARAMS if k in scale]
-    P = np.column_stack([(z[k] - center[k]) / scale[k] for k in params]) \
-        if params else np.empty((len(z["S"]), 0))
-    return params, P
+    if not params:
+        return params, np.empty((len(z["S"]), 0)), np.empty((len(z["S"]), 0))
+    P = np.column_stack([(z[k] - center[k]) / scale[k] for k in params])
+    Pk = np.column_stack([np.maximum(z[k], 0.0) / scale[k] for k in params])
+    return params, P, Pk
+
+
+def kink_index(spec: PutSpec, cfg: MultiConfig, params) -> int | None:
+    """Index of r in params when the r basis needs a knot at r = 0, else None.
+
+    With cfg.kink_r and 0 < r0 < alpha_r, the r window crosses 0, where the
+    early-exercise premium has a kink (it is 0 for r <= 0, d >= 0). The decision
+    depends only on (r0, alpha_r), so the pilot's exercise rule and the main
+    paths use the same basis."""
+    if not cfg.kink_r or "r" not in params:
+        return None
+    a_r = fixed_widths(spec, cfg, ("r",))["r"]
+    return params.index("r") if 0 < spec.r < a_r else None
 
 
 # --------------------------------------------------------------------------
@@ -410,11 +489,12 @@ def lsm_multi(spec: PutSpec, cfg: MultiConfig, z: dict, W: np.ndarray, scale: di
     """
     J = spec.J
     N = len(z["S"])
-    params, P = _params(spec, z, scale)
+    params, P, Pk = _params(spec, z, scale)
+    kink = kink_index(spec, cfg, params)
     mono, index = monomials(P, basis_terms(cfg.M_tau, len(params), cfg.weight,
-                                           cfg.param_degree))
+                                           cfg.param_degree, kink), Pk)
     mono_vf, index_vf = monomials(P, basis_terms(cfg.M_tau, len(params), cfg.weight_vf,
-                                                 cfg.param_degree))
+                                                 cfg.param_degree, kink), Pk)
     disc = np.exp(-z["r"] * spec.dt)
     cash = spec.payoff(stock_at(spec, z, W, J))
     euro_payoff = cash.copy()
@@ -470,6 +550,8 @@ class TaylorFit:
     coef: np.ndarray
     h: dict                      # half-width of the data in each dispersed coordinate
     A: np.ndarray                # design matrix
+    kink: int | None = None      # index in params of a truncated-power (kink) basis
+    center: dict | None = None   # z0
 
 
 def taylor_fit(spec: PutSpec, cfg: MultiConfig, z: dict, Y: np.ndarray,
@@ -480,12 +562,22 @@ def taylor_fit(spec: PutSpec, cfg: MultiConfig, z: dict, Y: np.ndarray,
     if dims is None:
         dims = [k for k in DIMS if np.ptp(z[k]) > 0]
     h = {k: float(np.max(np.abs(z[k] - center[k]))) for k in DIMS if k in dims}
-    params, P = _params(spec, z, h)
-    terms = basis_terms(cfg.M0, len(params), cfg.weight_vf, cfg.param_degree)
-    mono, mindex = monomials(P, terms)
+    params, P, Pk = _params(spec, z, h)
+    kink = kink_index(spec, cfg, params)
+    terms = basis_terms(cfg.M0, len(params), cfg.weight_vf, cfg.param_degree, kink)
+    mono, mindex = monomials(P, terms, Pk)
     A = design(np.vander((z["S"] - spec.S0) / h["S"], cfg.M0 + 1, increasing=True),
                mono, mindex)
-    return TaylorFit(params, terms, np.linalg.lstsq(A, Y, rcond=None)[0], h, A)
+    return TaylorFit(params, terms, np.linalg.lstsq(A, Y, rcond=None)[0], h, A, kink, center)
+
+
+def _feature_derivative(e: int, m: int, x0: float, h: float) -> float:
+    """m-th derivative at x0 of a parameter basis function: ((x - x0)/h)^e for
+    e >= 0, (max(x, 0)/h)^|e| for e < 0 (x0 > 0: the right branch of the knot)."""
+    if e >= 0:
+        return factorial(e) / h ** e if m == e else 0.0
+    k = -e
+    return factorial(k) / factorial(k - m) * x0 ** (k - m) / h ** k if m <= k else 0.0
 
 
 def greeks_from(fit: TaylorFit, add: dict | None = None) -> dict:
@@ -494,7 +586,28 @@ def greeks_from(fit: TaylorFit, add: dict | None = None) -> dict:
     out = {}
     for name, (i, *a_full) in GREEKS.items():
         a = tuple(ak for k, ak in zip(PARAMS, a_full) if k in fit.params)
-        if any(ak for k, ak in zip(PARAMS, a_full) if k not in fit.params) or (i, a) not in index:
+        if any(ak for k, ak in zip(PARAMS, a_full) if k not in fit.params):
+            out[name] = np.nan
+            continue
+        if fit.kink is not None:
+            # derivative of the fitted curve at z0: sum over the kink parameter's
+            # basis functions; the other parameters' monomials as usual
+            kp = fit.params[fit.kink]
+            val, found = 0.0, False
+            for n, (ti, ta) in enumerate(fit.terms):
+                if ti != i or any(ta[k] != a[k] for k in range(len(a)) if k != fit.kink):
+                    continue
+                dv = _feature_derivative(ta[fit.kink], a[fit.kink], fit.center[kp], fit.h[kp])
+                if dv:
+                    sc = factorial(i) * fit.h["S"] ** -i
+                    for k, (p, ak) in enumerate(zip(fit.params, a)):
+                        if k != fit.kink:
+                            sc *= factorial(ak) * fit.h[p] ** -ak
+                    val += fit.coef[n] * sc * dv
+                    found = True
+            out[name] = float(val) + (add or {}).get(name, 0.0) if found else np.nan
+            continue
+        if (i, a) not in index:
             out[name] = np.nan
             continue
         scale = factorial(i) * fit.h["S"] ** -i
@@ -508,7 +621,7 @@ def partial_residual(fit: TaylorFit, Y: np.ndarray, k: str) -> np.ndarray:
     """Y minus the fitted Taylor terms that involve any coordinate other than k."""
     def involves_other(i, a):
         others = [i > 0] if k != "S" else []
-        return any(others) or any(ak > 0 for p, ak in zip(fit.params, a) if p != k)
+        return any(others) or any(ak != 0 for p, ak in zip(fit.params, a) if p != k)
     cols = [n for n, (i, a) in enumerate(fit.terms) if involves_other(i, a)]
     return Y - fit.A[:, cols] @ fit.coef[cols]
 
@@ -564,6 +677,8 @@ def label(spec: PutSpec, cfg: MultiConfig, seed) -> dict:
     group; S-Greeks averaged over the runs; Theta from the PDE identity. Greeks
     no group identifies (Vera with the default groups) are left out. alpha_k
     is the width used for coordinate k, averaged over the runs that disperse it."""
+    if cfg.european_region and cfg.style == "bermudan" and spec.r <= 0 and spec.d >= 0:
+        return european_label(spec, cfg)
     ss = seed if isinstance(seed, np.random.SeedSequence) else np.random.SeedSequence(seed)
     runs = [run_group(spec, cfg, dims, child)
             for dims, child in zip(cfg.groups, ss.spawn(len(cfg.groups)))]
@@ -581,4 +696,25 @@ def label(spec: PutSpec, cfg: MultiConfig, seed) -> dict:
         vals = [r[f"alpha_{k}"] for r in runs if f"alpha_{k}" in r]
         if vals:
             out[f"alpha_{k}"] = float(np.mean(vals))
+    return out
+
+
+def european_label(spec: PutSpec, cfg: MultiConfig) -> dict:
+    """Exact label when r0 <= 0 and d0 >= 0 (MultiConfig.european_region).
+
+    There, exercising a put early is never optimal: the strike earns no interest
+    (r <= 0) and selling the stock gives up no positive carry (d >= 0), so the
+    Bermudan put equals the European put and so do its price, Delta, Gamma,
+    Theta, Vega, Volga and Vanna. Rho and Phi (and delta_r, delta_d) are the
+    European ones from the side of the no-exercise region; at r0 = 0 or d0 = 0
+    the early-exercise premium on the other side grows faster than linearly
+    (only deep in-the-money paths are exercised), so the one-sided derivative
+    from that side converges to the same value, but very slowly.
+    """
+    eu = bs_put(spec)
+    out = {k: float(eu[k]) for k in OUTPUTS if k in eu and k != "vera"}
+    out["ex_region"] = False
+    for dims in cfg.groups:
+        for k, v in fixed_widths(spec, cfg, dims).items():
+            out[f"alpha_{k}"] = 0.0
     return out

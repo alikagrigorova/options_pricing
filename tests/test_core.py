@@ -187,7 +187,7 @@ def test_multi_pilot_widths():
     spec = PutSpec(sigma=0.2, T=1.0)
     cfg = MultiConfig()
     assert pilot_widths(spec, cfg, ("S", "sigma")) == {"S": 10.0, "sigma": 0.6 * 0.2}
-    assert np.isclose(pilot_widths(spec, cfg, ("S", "r"))["r"], 1.3 * 0.02)
+    assert np.isclose(pilot_widths(spec, cfg, ("S", "r"))["r"], 1.3 * 0.03)
     fixed = MultiConfig(widths="fixed")
     assert pilot_widths(spec, fixed, ("S", "sigma")) == {
         "S": fixed_widths(spec, fixed, ("S",))["S"], "sigma": 1.3 * 0.25 * 0.2}
@@ -241,6 +241,27 @@ def test_multi_select_widths_on_a_known_curve():
     assert widths[1]["S"] < widths[0]["S"] and widths[1]["sigma"] < widths[0]["sigma"]
 
 
+def test_multi_select_widths_for_r_and_d():
+    # r and d widths from the selector when selected, also at r = d = 0
+    # (where the selector's own cap 0.75 x0 would be 0): positive, inside
+    # alpha0 / pilot_widen, and smaller where the curve is more curved.
+    from simgreeks.multi import MultiConfig, isd_multi, pilot_widths, select_widths
+    spec = PutSpec(S0=40.0, sigma=0.2, r=0.0, d=0.0)
+    cfg = MultiConfig(select=("S", "sigma", "r", "d"))
+    assert pilot_widths(spec, cfg, ("S", "r"))["r"] == cfg.alpha0_r
+    for k in ("r", "d"):
+        a0 = pilot_widths(spec, cfg, ("S", k))
+        rng = np.random.default_rng(5)
+        z = isd_multi(spec, cfg, a0, rng, N=50_000)
+        x, p = z["S"] - 40.0, z[k]
+        noise = 0.05 * rng.standard_normal(50_000)
+        widths = [select_widths(spec, cfg, z, 0.1 * x + 0.01 * x ** 2 - 10.0 * p
+                                + c3 * p ** 3 + noise, a0)[k] for c3 in (1e3, 1e5)]
+        assert all(0 < w <= a0[k] / cfg.pilot_widen for w in widths)
+        assert widths[1] < widths[0]
+    assert select_widths(spec, MultiConfig(), z, noise, a0)[k] == 0.03   # default: fixed (r0 = 0: no shrink)
+
+
 def test_multi_exercise_rules_out_of_sample():
     from simgreeks.multi import MultiConfig, brownian, isd_multi, lsm_multi
     spec = PutSpec(K=40, T=0.5)
@@ -265,7 +286,7 @@ def test_multi_label_widths():
     spec = PutSpec(K=40, T=0.5)
     out = label(spec, MultiConfig(N=20_000), 5)
     assert 0 < out["alpha_S"] <= 10.0 and 0 < out["alpha_sigma"] <= 0.6 * 0.2 / 1.3
-    assert out["alpha_r"] == out["alpha_d"] == 0.02
+    assert out["alpha_r"] == out["alpha_d"] == 0.03
     fixed = label(spec, MultiConfig(N=20_000, widths="fixed"), 5)
     assert np.isclose(fixed["alpha_S"], 0.6 * 40 * 0.2 * np.sqrt(0.5))
     assert np.isclose(fixed["alpha_sigma"], 0.25 * 0.2)
@@ -275,7 +296,7 @@ def test_multi_config_validation():
     import pytest
     from simgreeks.multi import MultiConfig
     for bad in (dict(exercise_rule="oos"), dict(param_kernel="gauss"), dict(widths="auto"),
-                dict(select=("r",)), dict(c_sigma=0.8, pilot_widen=1.3),
+                dict(select=("q",)), dict(rd_unit="pct"), dict(c_sigma=0.8, pilot_widen=1.3),
                 dict(c0_sigma=1.0), dict(pilot_widen=0.9)):
         with pytest.raises(ValueError):
             MultiConfig(**bad)
@@ -320,3 +341,74 @@ def test_labels_scale_with_S0_and_K():
         for k, p in (("price", 1), ("delta", 0), ("gamma", -1), ("alpha_star", 1)):
             if np.isfinite(x[k]):
                 assert np.isclose(y[k], x[k] * lam ** p, rtol=1e-6), (x["method"], k)
+
+
+def test_multi_rd_floor_spread():
+    # one-sided spread for r and d at x0 >= 0; symmetric otherwise and for S, sigma
+    from simgreeks.multi import MultiConfig, isd_multi, spread_bounds
+    cfg = MultiConfig(rd_floor=True)
+    assert spread_bounds(cfg, "r", 0.0, 0.03) == (0.0, 0.03)
+    assert spread_bounds(cfg, "d", 0.01, 0.03) == (0.0, 0.04)
+    assert spread_bounds(cfg, "r", 0.06, 0.03) == (0.06 - 0.03, 0.06 + 0.03)
+    assert spread_bounds(cfg, "sigma", 0.2, 0.05) == (0.2 - 0.05, 0.2 + 0.05)
+    assert spread_bounds(MultiConfig(), "r", 0.0, 0.03) == (-0.03, 0.03)
+    spec = PutSpec(r=0.0, d=0.0)
+    z = isd_multi(spec, cfg, {"S": 5.0, "d": 0.03}, np.random.default_rng(2), N=4096)
+    assert z["d"].min() >= 0 and z["d"].max() <= 0.03 and abs(z["d"].mean() - 0.015) < 1e-3
+
+
+def test_multi_european_region_label_matches_reference():
+    # r0 <= 0, d0 >= 0: no early exercise, so the exact European label equals the
+    # Bermudan reference in price, Delta, Gamma, Theta and Vega
+    from simgreeks.multi import MultiConfig, label
+    from simgreeks.reference import put_fd_greeks
+    spec = PutSpec(K=40.0, sigma=0.2, T=1.0, r=0.0, d=0.02)
+    lab = label(spec, MultiConfig(european_region=True), 0)
+    ref = put_fd_greeks(spec)
+    for q, tol in (("price", 1e-3), ("delta", 1e-3), ("gamma", 1e-3), ("theta", 5e-3), ("vega", 5e-3)):
+        assert abs(lab[q] - ref[q]) < tol, q
+
+
+def test_reference_one_sided_equals_central_where_smooth():
+    from simgreeks.reference import put_fd_greeks
+    spec = PutSpec(K=40.0, sigma=0.2, T=1.0, r=0.06, d=0.0)
+    c, f = put_fd_greeks(spec), put_fd_greeks(spec, one_sided=("r", "d"))
+    for q in ("rho", "phi"):
+        assert abs(f[q] - c[q]) < 5e-3 * abs(c[q])
+
+
+def test_multi_kink_basis_recovers_one_sided_derivative():
+    # Y with a kink at r = 0: slope -12 for r <= 0, -12 + 2.5 r^0.5-like curvature
+    # replaced by an exact truncated cubic, so the kink basis is exact; Rho at
+    # r0 is the right-branch derivative, and the plain basis is biased.
+    from simgreeks.multi import MultiConfig, isd_multi, taylor_fit, greeks_from
+    spec = PutSpec(S0=40.0, sigma=0.2, r=0.01, d=0.0)
+    z = isd_multi(spec, MultiConfig(), {"S": 5.0, "r": 0.03}, np.random.default_rng(3), N=50_000)
+    x, r = z["S"] - 40.0, z["r"]
+    rp = np.maximum(r, 0.0)
+    Y = 2.0 - 0.4 * x + 0.01 * x ** 2 - 12.0 * r + 300.0 * rp ** 2 - 2000.0 * rp ** 3 + 0.5 * x * rp
+    rho_true = -12.0 + 600.0 * 0.01 - 6000.0 * 0.01 ** 2
+    cfg = dict(alpha_r=0.03, alpha_r_shrink=False)          # window crosses r = 0
+    g_kink = greeks_from(taylor_fit(spec, MultiConfig(kink_r=True, **cfg), z, Y))
+    g_plain = greeks_from(taylor_fit(spec, MultiConfig(**cfg), z, Y))
+    assert abs(g_kink["rho"] - rho_true) < 1e-6
+    assert abs(g_kink["delta_r"] - 0.5) < 1e-6
+    assert abs(g_kink["price"] - (2.0 - 0.12 + 0.03 - 0.002)) < 1e-6
+    assert abs(g_plain["rho"] - rho_true) > 0.1
+
+
+def test_multi_alpha_r_shrink():
+    from simgreeks.multi import MultiConfig, fixed_widths
+    cfg = MultiConfig(alpha_r=0.03, alpha_r_shrink=True)
+    assert fixed_widths(PutSpec(r=0.01), cfg, ("S", "r"))["r"] == 0.01
+    assert fixed_widths(PutSpec(r=0.06), cfg, ("S", "r"))["r"] == 0.03
+    assert fixed_widths(PutSpec(r=0.0), cfg, ("S", "r"))["r"] == 0.03
+
+
+def test_multi_alpha_d_shrink():
+    from simgreeks.multi import MultiConfig, fixed_widths
+    w = lambda spec, how: fixed_widths(spec, MultiConfig(alpha_d=0.03, alpha_d_shrink=how), ("S", "d"))["d"]
+    assert w(PutSpec(r=0.01, d=0.0), "r0") == 0.01
+    assert w(PutSpec(r=0.01, d=0.005), "d0") == 0.005
+    assert w(PutSpec(r=0.01, d=0.0), "d0") == 0.03      # d0 = 0: no shrink
+    assert w(PutSpec(r=0.06, d=0.0), "r0") == 0.03

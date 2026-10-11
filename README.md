@@ -337,6 +337,40 @@ Open issues:
   161 % and 72 % of the Greek): a network needs many labels to learn them.
 - **Runtime.** About 3.3 s per one-year label on one core.
 
+### Label generator defaults (October 2026) and the evidence behind them
+
+`MultiConfig()` now encodes these choices; the older results files in `results/`
+were produced with α_r = α_d = 0.02 and no shrinking or European region.
+
+| Choice | Default | Evidence |
+|---|---|---|
+| α_S, α_σ | Paper's selector (Appendix A.2, M = ν + 1) on the pilot paths | Tables 4–5 reproduced with M = ν + 1 |
+| α_r, α_d (r0 ≥ 3 %) | Fixed 0.03 | Width sweep 0.01–0.10 (9 options, paired): noise ∝ 1/α, bias grows above 0.05; 0.03–0.04 gives the lowest error once labels are averaged |
+| α_r, α_d (0 < r0 < 3 %) | min(0.03, r0) (`alpha_r_shrink`, `alpha_d_shrink="r0"`) | 200-rep paired check at r0 = 0.5 %, 1 %: Rho unbiased on 9/12 options (current window: 0/12), Phi 9/12 (current 1/12); the d0 window is worse. Cost: Rho noise 11–29 % per label, Phi 13–38 % |
+| r0 ≤ 0, d0 ≥ 0 | Exact European label (`european_region`) | No early exercise there: price, Δ, Γ, Θ, Vega match the Bermudan reference to 3 decimals; Rho, Phi are the no-exercise-side values |
+| Selector for α_r, α_d | Off | Selected widths vary ±30 % per label; Rho, Phi noise +15–23 %, no bias gain |
+| Kink basis in r (`kink_r`) | Off | No consistent bias gain, ≈2× noise, worse price and Γ |
+| One-sided r, d spread (`rd_floor`) | Off | Noise ≈10× (derivative at the edge of the data) |
+| Exercise-rule control variate (Y − D) | Removed | Price −0.23 % instead of −0.12 % (`results/diagnostics/price_bias/rule_cv`) |
+| t1 control variate | On | Paired check without it: noise 1.5–1.8× (`results/multi_check_american_no_cv_vs_american.md`) |
+| Exercise at t1 | By the rule, not max(Z, Ĉ) | max(Z, Ĉ) biased Volga +34 % |
+| Exercise rule | Refitted on the rescaled pilot paths, applied out of sample | In-sample rule biased Volga +50 % |
+| N_pilot = N | 100,000 each | 4× pilot paths did not remove the price bias (`results/diagnostics/price_bias/pilot_size.md`) |
+
+Reference values near r = 0: `put_fd_greeks(..., one_sided=("r", "d"))` gives
+forward bumps. Just above r = 0 the price bends sharply (the premium grows faster
+than linearly in r), so at r0 = 0 the forward value depends on the bump; for
+r0 ≥ 0.5 % central and forward bumps agree.
+
+Open issues:
+- Rho and Phi stay 3–4 % off at r0 = d0 = 1 % (K = 40, 44) with every window
+  tried; the cause is unknown (the window does not cross r = 0 there).
+- The price is about 0.1 % low: an estimated exercise rule is suboptimal, so the
+  price is a lower bound; Δ inherits it. Shrinking the r and d windows adds
+  0.04–0.10 percentage points at small r0.
+- Labels are Bermudan (exercise on 50 dates per year), 0.2–0.3 % below American
+  values.
+
 ## Choices the paper leaves open
 
 **Selector** (`simgreeks/selector.py`). Stated in the paper and implemented as

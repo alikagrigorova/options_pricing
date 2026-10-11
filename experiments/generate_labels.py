@@ -17,6 +17,18 @@ values K - S0, -1 and 0, as in the labels). The reference values are for
 checking the labels (experiments/analyze_labels.py) and add about 25 % to the
 time.
 
+Small positive rates. Near r = 0 the early-exercise premium has a kink (it is 0
+for r <= 0, d >= 0), and Rho changes fast just above it. Shrinking windows,
+MultiConfig(alpha_r_shrink=True, alpha_d_shrink="r0"): alpha_r = alpha_d =
+min(0.03, r0), remove most of the Rho and Phi bias there (200-replication check
+at r0 = 0.5 % and 1 %, sigma = 20 %, T = 1), but the noise of one label grows
+like 1 / r0: Rho 11-19 % at r0 = 1 % and 16-29 % at 0.5 %, Phi 13-23 % and
+19-38 %, against 3-6 % with the 0.03 window. When building a training set,
+oversample r0 in (0, 0.03) so that a network sees enough labels there to
+average the extra noise out; r0 = 0 itself is exact with
+MultiConfig(european_region=True). Open: at r0 = d0 = 1 % (K = 40, 44) Rho and
+Phi stay 3-4 % off with any window.
+
 Progress is printed at every 1 %. Each finished option is appended to
 <out>.partial.csv, so an interrupted run resumes where it stopped when the same
 command is run again; the partial files are removed once the CSV is written.

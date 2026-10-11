@@ -142,7 +142,7 @@ BUMPS = {"sigma": 0.005, "r": 0.002, "d": 0.002}
 
 
 def put_fd_greeks(spec: PutSpec, style: str = "bermudan", grid: FDGrid = FDGrid(),
-                  bumps: dict = BUMPS) -> dict:
+                  bumps: dict = BUMPS, one_sided: tuple = ()) -> dict:
     """put_fd at z0 plus Greeks in sigma, r and d from bumped solves on the same
     x-grid (so the discretisation error cancels), by central differences with
     steps h and h/2 combined by Richardson extrapolation, (4 D(h/2) - D(h)) / 3:
@@ -151,6 +151,11 @@ def put_fd_greeks(spec: PutSpec, style: str = "bermudan", grid: FDGrid = FDGrid(
       volga                  : (P(+h) - 2 P + P(-h)) / h^2   (sigma only)
       vanna, delta_r, delta_d: (Delta(+h) - Delta(-h)) / 2h
       vera                   : (P(++) - P(+-) - P(-+) + P(--)) / (4 h_sigma h_r)
+
+    one_sided: parameters ("r", "d") differentiated forward instead,
+    (P(+h) - P) / h and (Delta(+h) - Delta) / h, combined as 2 D(h/2) - D(h).
+    At r = 0 (or d = 0) the price has a kink-like non-smoothness (no early
+    exercise on one side), so the forward value depends strongly on h there.
     """
     grid = replace(grid, half_width=grid.half_width or _half_width(spec, grid))
     base = put_fd(spec, style, grid)
@@ -159,8 +164,11 @@ def put_fd_greeks(spec: PutSpec, style: str = "bermudan", grid: FDGrid = FDGrid(
 
     def differences(k, h):
         up = put_fd(replace(spec, **{k: getattr(spec, k) + h}), style, grid)
-        dn = put_fd(replace(spec, **{k: getattr(spec, k) - h}), style, grid)
         first, cross = names[k]
+        if k in one_sided:
+            return {first: (up["price"] - base["price"]) / h,
+                    cross: (up["delta"] - base["delta"]) / h}
+        dn = put_fd(replace(spec, **{k: getattr(spec, k) - h}), style, grid)
         D = {first: (up["price"] - dn["price"]) / (2 * h),
              cross: (up["delta"] - dn["delta"]) / (2 * h)}
         if k == "sigma":
@@ -174,7 +182,8 @@ def put_fd_greeks(spec: PutSpec, style: str = "bermudan", grid: FDGrid = FDGrid(
 
     for k, h in bumps.items():
         coarse, fine = differences(k, h), differences(k, h / 2)
-        out.update({q: (4 * fine[q] - coarse[q]) / 3 for q in coarse})
+        w = 2 if k in one_sided else 4             # error O(h) forward, O(h^2) central
+        out.update({q: (w * fine[q] - coarse[q]) / (w - 1) for q in coarse})
     if "sigma" in bumps and "r" in bumps:
         hs, hr = bumps["sigma"], bumps["r"]
         out["vera"] = (4 * cross(hs / 2, hr / 2) - cross(hs, hr)) / 3
