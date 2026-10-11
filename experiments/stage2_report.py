@@ -129,13 +129,15 @@ def bias_tables(df: pd.DataFrame, thresholds: dict, L: list, flags: list, col_of
                     sa = f"**{sa}**"
             else:
                 sa, ta = "–", np.nan
-            for kind, t in (("rel.", tr), ("abs.", ta)):
+            for kind, t, n, v in (("rel.", tr, len(er), f"{100 * er.mean():+.3f} %" if len(er) else ""),
+                                  ("abs.", ta, len(ea), f"{ea.mean():+.2e}" if len(ea) else "")):
                 if np.isfinite(t) and abs(t) > 3:
-                    flags.append((q, name, kind, t))
+                    flags.append((q, name, kind, n, v, t))
             med = f"{100 * er.median():+.3f}" if len(er) else "–"
             sc, ts = stat((d[col_of(q)] - d[f"ref_{q}"]) / scales[q], 100, 3)
             if np.isfinite(ts) and abs(ts) > 3:
-                flags.append((q, name, "scaled", ts))
+                flags.append((q, name, "scaled", len(d),
+                              f"{100 * (d[col_of(q)] - d[f'ref_{q}']).mean() / scales[q]:+.3f} %", ts))
             w(f"| {name} | {len(er)} | {sr} | {med} | {len(ea)} | {sa} | {sc} |")
         w("")
 
@@ -292,10 +294,11 @@ def main():
         w("")
     w("## Regions with |t| > 3 (default label)\n")
     if flags:
-        w("| Greek | region | kind | t |")
-        w("|---|---|---|---|")
-        for q, name, kind, t in flags:
-            w(f"| {q} | {name} | {kind} | {t:+.1f} |")
+        w("n: points behind the statistic (with n < 30 the t is unreliable).\n")
+        w("| Greek | region | kind | n | bias | t |")
+        w("|---|---|---|---|---|---|")
+        for q, name, kind, n, v, t in flags:
+            w(f"| {q} | {name} | {kind} | {n} | {v} | {t:+.1f} |")
     else:
         w("None.")
     w("")
