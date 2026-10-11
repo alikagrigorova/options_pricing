@@ -454,10 +454,28 @@ def test_multi_insample_too_keeps_the_oos_label():
     # <greek>_avg is the mean of the out-of-sample and in-sample labels
     from simgreeks.multi import MultiConfig, label
     spec = PutSpec(K=40.0, sigma=0.2, T=0.25, r=0.06, d=0.0)
-    base = label(spec, MultiConfig(N=20_000), np.random.SeedSequence(11))
-    both = label(spec, MultiConfig(N=20_000, insample_too=True), np.random.SeedSequence(11))
+    base = label(spec, MultiConfig(N=20_000, label_source="oos"), np.random.SeedSequence(11))
+    both = label(spec, MultiConfig(N=20_000, insample_too=True, label_source="oos"),
+                 np.random.SeedSequence(11))
     for q in ("price", "delta", "gamma", "vega", "rho", "phi"):
-        assert both[q] == base[q]
+        assert both[q] == base[q] == both[f"{q}_oos"]
         assert np.isclose(both[f"{q}_avg"], 0.5 * (both[q] + both[f"{q}_ins"]))
     eu = label(PutSpec(r=0.0, d=0.01), MultiConfig(insample_too=True), 1)
     assert eu["price_ins"] == eu["price_avg"] == eu["price"]
+
+
+def test_multi_hybrid_default_label():
+    # default label: avg for price, Delta, Gamma, Theta, Vega, Rho, Phi; oos for
+    # Volga, Vanna and the other cross derivatives; the oos part equals D2-prod
+    from simgreeks.multi import HYBRID_OOS, MultiConfig, label
+    spec = PutSpec(K=40.0, sigma=0.2, T=0.25, r=0.06, d=0.0)
+    oos = label(spec, MultiConfig(N=20_000, label_source="oos"), np.random.SeedSequence(11))
+    hyb = label(spec, MultiConfig(N=20_000), np.random.SeedSequence(11))
+    for q in ("price", "delta", "gamma", "theta", "vega", "volga", "vanna", "rho", "phi",
+              "delta_r", "delta_d"):
+        assert hyb[f"{q}_oos"] == oos[q]
+        assert hyb[q] == hyb[f"{q}_oos" if q in HYBRID_OOS else f"{q}_avg"]
+    assert hyb["default_source"] == ("avg: price delta gamma vega rho phi theta; "
+                                     "oos: volga vanna delta_r delta_d")
+    assert label(spec, MultiConfig(N=20_000, label_source="avg"), np.random.SeedSequence(11))[
+        "volga"] == hyb["volga_avg"]

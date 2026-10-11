@@ -83,3 +83,23 @@ Reports are written to `$OUT/report_<part>.md`. Bring everything back with
 
 (tmux on a compute node ends with the qrsh session; the job array above is the
 robust option.)
+
+## Stage 2: the default label on 10,000 Sobol options
+
+Parts `stage2` (one label per option), `stage2_ref` (PDE reference) and
+`stage2_noise` (200 options x 30 labels); report: `experiments/stage2_report.py`.
+Keep `--ntasks` the same for the pilot and the full run: the pilot's labels are
+the first 500 of the full run and are skipped there.
+
+    cd ~/experiments/options_pricing && git pull
+    export SCC_PROJECT=robustvb OUT=~/experiments/stage2_out
+    # pilot: the first 500 options
+    LIMIT=500 bash scc/submit.sh stage2 100 01:00:00
+    LIMIT=500 bash scc/submit.sh stage2_ref 100 01:00:00
+    # report of the pilot (time per label, projected hours)
+    python experiments/stage2_report.py --out $OUT --pilot
+    # full run, after the pilot is approved
+    bash scc/submit.sh stage2 100 <h_rt>
+    bash scc/submit.sh stage2_ref 100 <h_rt>
+    bash scc/submit.sh stage2_noise 100 <h_rt>
+    python experiments/stage2_report.py --out $OUT

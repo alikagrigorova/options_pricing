@@ -128,6 +128,16 @@ GREEKS = {
     "drho_dd": (0, 0, 1, 1),     # d2P / dr dd     (needs r and d in one run)
 }
 S_GREEKS = ("price", "delta", "gamma")
+# Default label (MultiConfig.label_source = "hybrid"): the average of the
+# out-of-sample and in-sample labels, except for the Greeks listed here, which
+# keep the out-of-sample label. The out-of-sample price is biased low and its
+# Delta high (the rule fitted on the pilot is suboptimal on the main paths, a
+# lower bound); the in-sample label is biased the other way, and the average
+# removes most of both (production check of D2-avg,
+# results/production_check/report_avg.md). The in-sample Volga is biased up
+# (+23 %), so Volga and the other cross derivatives keep the out-of-sample label.
+HYBRID_OOS = ("volga", "vanna", "delta_r", "delta_d", "vera", "dvega_dd", "drho_dd")
+LABEL_SOURCES = ("hybrid", "avg", "oos")
 
 # Label designs: the runs of one label (each run disperses S and the listed
 # parameters). With a run in S alone, price, Delta and Gamma come from it;
@@ -181,6 +191,8 @@ class MultiConfig:
     european_region: bool = True   # r0 <= 0 and d0 >= 0: exact European label (see label)
     t0_max_order: tuple = ()       # t = 0 basis: (param, max exponent) caps, e.g. (("r", 2), ("d", 2))
     insample_too: bool = False     # also the in-sample label on the same main paths (<greek>_ins, <greek>_avg)
+    label_source: str = "hybrid"   # plain <greek> keys: "hybrid" (avg, but oos for HYBRID_OOS), "avg" or
+    #                                "oos" (D2-prod); "hybrid" and "avg" imply insample_too
 
     def __post_init__(self):
         for dims in self.groups:
@@ -195,6 +207,8 @@ class MultiConfig:
                 raise ValueError(f"unknown {name} {value!r}")
         if not set(self.select) <= set(DIMS):
             raise ValueError(f"select must be a subset of {DIMS}")
+        if self.label_source not in LABEL_SOURCES:
+            raise ValueError(f"unknown label_source {self.label_source!r}")
         if self.alpha_d_shrink not in ("", "r0", "d0"):
             raise ValueError(f"unknown alpha_d_shrink {self.alpha_d_shrink!r}")
         if self.rd_unit not in ("pilot", "raw"):
@@ -690,7 +704,7 @@ def run_group(spec: PutSpec, cfg: MultiConfig, dims, seed) -> dict:
     _, Y, _ = lsm_multi(spec, cfg, z, W, scale, rules)
     add = bs_put(spec) if cfg.control_variate else None
     out = greeks_multi(spec, cfg, dims, z, Y, add)
-    if cfg.insample_too and cfg.style == "bermudan" and rules is not None:
+    if _with_ins(cfg) and cfg.style == "bermudan" and rules is not None:
         # the in-sample label: the exercise rule refitted on these main paths and
         # applied to them (no random numbers used, so the label above is unchanged)
         _, Y_ins, _ = lsm_multi(spec, cfg, z, W, alphas, None)
@@ -710,9 +724,10 @@ def label(spec: PutSpec, cfg: MultiConfig, seed) -> dict:
     runs = [run_group(spec, cfg, dims, child)
             for dims, child in zip(cfg.groups, ss.spawn(len(cfg.groups)))]
     out = _assemble(spec, cfg, runs)
-    if cfg.insample_too and all("ins" in r for r in runs):
+    if _with_ins(cfg) and all("ins" in r for r in runs):
         ins = _assemble(spec, cfg, [r["ins"] for r in runs])
         _add_ins_avg(out, ins)
+        _set_default(out, cfg)
     for k in DIMS:
         vals = [r[f"alpha_{k}"] for r in runs if f"alpha_{k}" in r]
         if vals:
@@ -751,6 +766,24 @@ def _add_ins_avg(out: dict, ins: dict) -> None:
     out["ex_region_ins"] = ins["ex_region"]
 
 
+def _with_ins(cfg: MultiConfig) -> bool:
+    return cfg.insample_too or cfg.label_source != "oos"
+
+
+def _set_default(out: dict, cfg: MultiConfig) -> None:
+    """Keep the out-of-sample label as <greek>_oos and set the plain keys to the
+    default label (MultiConfig.label_source); default_source says which it is."""
+    srcs = {"avg": [], "oos": []}
+    for k in OUTPUTS:
+        if f"{k}_avg" not in out:
+            continue
+        out[f"{k}_oos"] = out[k]
+        src = "oos" if cfg.label_source == "oos" or (cfg.label_source == "hybrid" and k in HYBRID_OOS) else "avg"
+        out[k] = out[f"{k}_{src}"]
+        srcs[src].append(k)
+    out["default_source"] = "; ".join(f"{m}: {' '.join(v)}" for m, v in srcs.items() if v)
+
+
 def european_label(spec: PutSpec, cfg: MultiConfig) -> dict:
     """Exact label when r0 <= 0 and d0 >= 0 (MultiConfig.european_region).
 
@@ -767,8 +800,9 @@ def european_label(spec: PutSpec, cfg: MultiConfig) -> dict:
     out = {k: float(eu[k]) for k in OUTPUTS if k in eu and k != "vera"}
     out["ex_region"] = False
     out["european_region"] = True
-    if cfg.insample_too:               # exact: the in-sample and average labels are the same
+    if _with_ins(cfg):                 # exact: the in-sample and average labels are the same
         _add_ins_avg(out, dict(out))
+        _set_default(out, cfg)
     for dims in cfg.groups:
         for k, v in fixed_widths(spec, cfg, dims).items():
             out[f"alpha_{k}"] = 0.0
@@ -785,4 +819,5 @@ def design_config(design: str, exercise_rule: str = "pilot", budget: int = 400_0
     n = int(round(budget / len(groups)))
     if design in ("D3", "D4"):          # joint runs: order 3 in sigma, 2 in r and d
         kw.setdefault("t0_max_order", (("sigma", 3), ("r", 2), ("d", 2)))
+    kw.setdefault("label_source", "oos")   # the tournament's labels
     return MultiConfig(groups=groups, N=n, N_pilot=n, exercise_rule=exercise_rule, **kw)
