@@ -380,7 +380,7 @@ Open issues:
 - Labels are Bermudan (exercise on 50 dates per year), 0.2–0.3 % below American
   values.
 
-### Label designs and the tournament (in progress)
+### Label designs and the tournament
 
 `simgreeks.multi.DESIGNS` defines four ways to split a label into runs, and
 `design_config(design, rule)` gives each the same budget of 400,000 main +
@@ -408,7 +408,15 @@ check (50 reps) and 2,500 options drawn over S0/K ∈ [0.85, 1.20], σ, T, d and
 α_r = min(0.03, r0) ≥ 0.0025) against `reference.label_reference` (central
 bumps with the r bump ≤ r0/2, forward bumps for Rho and Phi, European values at
 r0 ≤ 0, d0 ≥ 0). It runs as SGE job arrays on the BU SCC (`scc/README.md`).
-Results will be added here.
+
+Results (`results/tournament/`): in-sample exercise rules bias Volga (+35 to +72 %)
+and are out. **D2-oos**, the current default, is the only design with unbiased
+Rho, Phi and Vega overall and in every region, and the least noisy for price,
+Δ, Γ, Θ; it is the recommendation. D3-oos is 2–4× cheaper per unit of accuracy
+for Rho, Phi, Volga and the cross terms and adds Vera, but its Rho (−1.1 %), Phi
+(+0.6 %) and Vega (−0.6 %) are biased, likely from the order-2 cap in r and d at
+t = 0. D4-oos is the least noisy for every parameter Greek but costs 4.5× the
+time per label. D1-oos has no advantage.
 
 ## Choices the paper leaves open
 
