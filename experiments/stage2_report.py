@@ -107,11 +107,16 @@ def fmt_abs(x: float) -> str:
 def bias_tables(df: pd.DataFrame, thresholds: dict, L: list, flags: list, col_of=lambda q: q):
     w = L.append
     regs = regions(df)
+    scales = {q: df[f"ref_{q}"].abs().mean() for q in GREEKS}
     for q in GREEKS:
         w(f"### {q}\n")
-        w(f"Relative where |PDE| ≥ {fmt_abs(thresholds[q])} (1 % of the largest); absolute otherwise.\n")
-        w("| region | n rel. | rel. bias % ± se (t) | n abs. | abs. bias ± se (t) |")
-        w("|---|---|---|---|---|")
+        w(f"Relative where |PDE| ≥ {fmt_abs(thresholds[q])} (1 % of the largest); absolute otherwise. "
+          f"Median rel. error: over the same points as the relative bias. Scaled bias: mean of "
+          f"(MC − PDE) over all points / mean |PDE| ({fmt_abs(scales[q])}), robust where the Greek "
+          f"crosses zero.\n")
+        w("| region | n rel. | rel. bias % ± se (t) | median rel. error % | n abs. | abs. bias ± se (t) | "
+          "scaled bias % ± se (t) |")
+        w("|---|---|---|---|---|---|---|")
         for name, sel in regs.items():
             d = df[np.asarray(sel)]
             er, ea = errors(d, q, col_of(q), thresholds[q])
@@ -127,7 +132,11 @@ def bias_tables(df: pd.DataFrame, thresholds: dict, L: list, flags: list, col_of
             for kind, t in (("rel.", tr), ("abs.", ta)):
                 if np.isfinite(t) and abs(t) > 3:
                     flags.append((q, name, kind, t))
-            w(f"| {name} | {len(er)} | {sr} | {len(ea)} | {sa} |")
+            med = f"{100 * er.median():+.3f}" if len(er) else "–"
+            sc, ts = stat((d[col_of(q)] - d[f"ref_{q}"]) / scales[q], 100, 3)
+            if np.isfinite(ts) and abs(ts) > 3:
+                flags.append((q, name, "scaled", ts))
+            w(f"| {name} | {len(er)} | {sr} | {med} | {len(ea)} | {sa} | {sc} |")
         w("")
 
 
@@ -197,14 +206,18 @@ def timing(lab: pd.DataFrame, ref: pd.DataFrame, L: list, ntasks=(100, 200)):
 def mode_table(df: pd.DataFrame, thresholds: dict, L: list):
     w = L.append
     w("Relative bias % ± se (t), all non-exact points with |PDE| ≥ 1 % of the largest. **default** is the "
-      "label in the plain columns (`default_source`).\n")
-    w("| Greek | default (source) | oos | ins | avg |")
-    w("|---|---|---|---|---|")
+      "label in the plain columns (`default_source`). Median rel. error: same points. Scaled bias: mean of "
+      "(MC − PDE) over all non-exact points / mean |PDE|, ± se (t); it is not dominated by the points where "
+      "the Greek is near zero (Volga, Vanna, delta_r, delta_d cross zero in the input range).\n")
+    w("| Greek | default (source) | oos | ins | avg | default: median rel. error % | default: scaled bias % |")
+    w("|---|---|---|---|---|---|---|")
     src = df.default_source.dropna().iloc[0] if df.default_source.notna().any() else ""
     oos_set = src.split("oos:")[1].split() if "oos:" in src else []
     for q in GREEKS:
         cells = [stat(errors(df, q, q, thresholds[q])[0], 100, 3)[0] + f" ({'oos' if q in oos_set else 'avg'})"]
         cells += [stat(errors(df, q, f"{q}_{m}", thresholds[q])[0], 100, 3)[0] for m in MODES]
+        cells.append(f"{100 * errors(df, q, q, thresholds[q])[0].median():+.3f}")
+        cells.append(stat((df[q] - df[f"ref_{q}"]) / df[f"ref_{q}"].abs().mean(), 100, 3)[0])
         w(f"| {q} | " + " | ".join(cells) + " |")
     w("")
 
