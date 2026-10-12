@@ -103,3 +103,23 @@ the first 500 of the full run and are skipped there.
     bash scc/submit.sh stage2_ref 100 <h_rt>
     bash scc/submit.sh stage2_noise 100 <h_rt>
     python experiments/stage2_report.py --out $OUT
+
+## American options with daily exercise, puts and calls: Stage A
+
+Branch `claude/american-daily`. Parts `amd_check` (70 check options x 100 labels x
+2 variants), `amd_random` (1,000 puts + 1,000 calls x 2 variants), and their PDE
+references `amd_check_ref`, `amd_random_ref` (American and daily Bermudan);
+report: `experiments/american_daily_report.py`. A daily-exercise label takes
+about 25 / 50 / 130 s at T = 0.5 / 1 / 2 on one core, peak memory about 0.6 GB;
+a reference 10-90 s. About 340 CPU hours in all.
+
+    cd ~/experiments/options_pricing
+    git fetch origin claude/american-daily && git checkout claude/american-daily && git pull
+    source ~/venvs/simgreeks/bin/activate
+    export SCC_PROJECT=robustvb OUT=~/experiments/amd_out
+    bash scc/submit.sh amd_check_ref 70 01:00:00
+    bash scc/submit.sh amd_random_ref 100 02:00:00
+    bash scc/submit.sh amd_check 400 03:00:00
+    bash scc/submit.sh amd_random 200 02:00:00
+    # when qstat -u $USER is empty:
+    cd ~/experiments && tar czf amd_out.tar.gz amd_out

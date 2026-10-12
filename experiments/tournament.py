@@ -23,6 +23,17 @@ in-sample labels; experiments/stage2_report.py):
   Pilot: stage2 and stage2_ref with --limit 500 (the first 500 options). Run the
   full parts later with the same --ntasks and --out: the pilot's labels are kept.
 
+American options with daily exercise (252 dates a year), puts and calls, Stage A
+(experiments/american_daily_report.py); variants AMD_VARIANTS, paired seeds:
+  amd_check       : 35 put check options (the production check's) and 35 call
+                    check options (CALL_CELLS), ids 0-34 puts, 35-69 calls, 100 reps
+  amd_random      : 1,000 puts and 1,000 calls on the Sobol sequence of inputs(),
+                    points AMD_RANDOM_START.. (puts) and the next 1,000 (calls);
+                    ids 0-999 puts, 1000-1999 calls; 1 label each
+  amd_check_ref,
+  amd_random_ref  : label_reference with style "american" (continuous exercise)
+                    and "bermudan" (the labels' daily dates, columns berm_<greek>)
+
 Seeds depend only on (part, option, replication), never on the variant, so
 variants are paired. Task i of n runs every n-th job; rows are written to
 <out>/<part>/task_<i>/chunk_<k>.parquet every --chunk labels, and a restarted
@@ -68,12 +79,25 @@ S0 = 40.0
 N_OPTIONS = 2500
 INPUT_SEED = 20261011
 BASE_SEED = {"european": 8001, "american": 8002, "tournament": 8003, "production_check": 8004,
-             "production_avg": 8005, "stage2": 8006, "stage2_noise": 8007}
+             "production_avg": 8005, "stage2": 8006, "stage2_noise": 8007,
+             "amd_check": 8010, "amd_random": 8011}
 REPS = {"european": 100, "american": 50, "tournament": 1, "production_check": 100, "production_avg": 100,
-        "stage2": 1, "stage2_noise": 30}
+        "stage2": 1, "stage2_noise": 30, "amd_check": 100, "amd_random": 1}
 N_STAGE2 = 10_000
 NOISE_STEP = 50                 # stage2_noise: options 0, 50, ..., 9950
-REF_PARTS = ("reference", "stage2_ref")
+REF_PARTS = ("reference", "stage2_ref", "amd_check_ref", "amd_random_ref")
+# American options with daily exercise
+AMD_SPY = 252
+AMD_VARIANTS = ["D2-daily", "D2-daily-vf50"]   # value-function label at t_1 / at 1/50 year
+# call check: the put grid's T, sigma, K with r = 6 %, d = 4 % (early exercise),
+# plus r = 0, d = 4 % (strong early exercise), r = 6 %, d = 0 (exact European)
+# and r = 6 %, d = 2 %
+CALL_CELLS = ([(T, s, 0.06, 0.04, K) for T in (0.5, 1.0, 2.0) for s in (0.10, 0.20, 0.40)
+               for K in (36, 40, 44)]
+              + [(1.0, 0.20, 0.0, 0.04, K) for K in (36, 40, 44)]
+              + [(1.0, 0.20, 0.06, 0.0, K) for K in (36, 40, 44)]
+              + [(1.0, 0.20, 0.06, 0.02, K) for K in (36, 40)])
+AMD_RANDOM_START, AMD_RANDOM_N = 20_000, 1_000  # Stage B uses points 0-19,999
 # production check: the 33 American check options plus r0 = d0 = 1 %, K = 40, 44 (sigma 20 %, T = 1)
 EXTRA_CELLS = [(1.0, 0.20, 0.01, 0.01, 40), (1.0, 0.20, 0.01, 0.01, 44)]
 PROD_VARIANT = "D2-prod"     # MultiConfig() defaults: D2, out-of-sample rule, 100,000 paths per run
@@ -95,14 +119,15 @@ EXTRA = ["ex_region", "european_region", "alpha_S", "alpha_sigma", "alpha_r", "a
 # --------------------------------------------------------------------------
 # Options
 # --------------------------------------------------------------------------
-def inputs(n: int = N_OPTIONS) -> pd.DataFrame:
+def inputs(n: int = N_OPTIONS, start: int = 0) -> pd.DataFrame:
     """Tournament options: S0 = 40; S0/K in [0.85, 1.20], sigma in [0.10, 0.40],
     T in [0.25, 2], d in [0, 0.04]; r: 2 % at r = 0, 25 % in (0, 0.03), the rest
     in [0.03, 0.06]. r is rounded to 0.25 % steps, so the smallest positive r0 is
-    0.0025 and the shrinking window alpha_r = min(0.03, r0) stays >= 0.0025."""
+    0.0025 and the shrinking window alpha_r = min(0.03, r0) stays >= 0.0025.
+    Points start .. start + n - 1 of the sequence (ids 0 .. n - 1)."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        U = qmc.Sobol(d=5, scramble=True, seed=INPUT_SEED).random(n)
+        U = qmc.Sobol(d=5, scramble=True, seed=INPUT_SEED).random(start + n)[start:]
     m = 0.85 + 0.35 * U[:, 0]
     sigma = np.round(0.10 + 0.30 * U[:, 1], 3)
     T = np.round(0.25 + 1.75 * U[:, 2], 3)
@@ -118,6 +143,8 @@ def inputs(n: int = N_OPTIONS) -> pd.DataFrame:
 
 
 def options(part: str) -> pd.DataFrame:
+    if part.startswith("amd_"):
+        return amd_options(part)
     if part == "tournament" or part == "reference":
         return inputs()
     if part in ("stage2", "stage2_ref"):
@@ -133,9 +160,28 @@ def options(part: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def amd_options(part: str) -> pd.DataFrame:
+    """Options of the daily-exercise parts, with columns kind and spy."""
+    if part.startswith("amd_check"):
+        from experiments.multi_check import american_grid
+        cells = [("put", c) for c in american_grid() + EXTRA_CELLS] + [("call", c) for c in CALL_CELLS]
+        df = pd.DataFrame([dict(id=i, S0=S0, K=float(K), sigma=s, r=r, d=d, T=T, kind=k)
+                           for i, (k, (T, s, r, d, K)) in enumerate(cells)])
+    else:
+        puts = inputs(AMD_RANDOM_N, AMD_RANDOM_START).assign(kind="put")
+        calls = inputs(AMD_RANDOM_N, AMD_RANDOM_START + AMD_RANDOM_N).assign(kind="call")
+        calls["id"] += AMD_RANDOM_N
+        df = pd.concat([puts, calls], ignore_index=True)
+    df["spy"] = AMD_SPY
+    return df
+
+
 def spec_of(row) -> PutSpec:
+    extra = {}
+    if "kind" in row:
+        extra = dict(kind=str(row["kind"]), steps_per_year=int(row["spy"]))
     return PutSpec(S0=float(row["S0"]), K=float(row["K"]), sigma=float(row["sigma"]),
-                   r=float(row["r"]), d=float(row["d"]), T=float(row["T"]))
+                   r=float(row["r"]), d=float(row["d"]), T=float(row["T"]), **extra)
 
 
 def config_of(variant: str) -> MultiConfig:
@@ -143,8 +189,10 @@ def config_of(variant: str) -> MultiConfig:
         return MultiConfig(label_source="oos")
     if variant == "D2-avg":
         return MultiConfig(insample_too=True, label_source="oos")
-    if variant == STAGE2_VARIANT:
+    if variant == STAGE2_VARIANT or variant == "D2-daily":
         return MultiConfig()
+    if variant == "D2-daily-vf50":
+        return MultiConfig(vf_time=0.02)
     if variant == "D3o3-oos":
         # the tournament's alpha_d rule (min(0.03, r0)), so only the t = 0 order differs from D3-oos
         return design_config("D3", "pilot", t0_max_order=ORDER3, alpha_d_shrink="r0")
@@ -164,6 +212,7 @@ def jobs_of(part: str, limit: int | None = None, variants=None):
         return [(int(i), 0, "reference") for i in opts.id]
     vs = variants or (EU_VARIANTS if part == "european" else
                       [STAGE2_VARIANT] if part.startswith("stage2") else
+                      AMD_VARIANTS if part.startswith("amd_") else
                       [PROD_VARIANT] if part == "production_check" else
                       ["D2-avg"] if part == "production_avg" else VARIANTS)
     return [(int(i), rep, v) for i in opts.id for rep in range(REPS[part]) for v in vs]
@@ -185,10 +234,19 @@ def one(part: str, opts: pd.DataFrame, job, mem: bool) -> dict:
     row = opts.loc[opts.id == i].iloc[0]
     spec = spec_of(row)
     out = dict(part=part, id=i, rep=rep, variant=variant, **{c: float(row[c]) for c in INPUT_COLS})
+    if "kind" in row:
+        out["kind"], out["spy"] = str(row["kind"]), int(row["spy"])
     if mem:
         tracemalloc.start()
     t = time.perf_counter()
-    if part in REF_PARTS:
+    if part in ("amd_check_ref", "amd_random_ref"):
+        am = label_reference(spec, style="american", vera=False)
+        be = label_reference(spec, style="bermudan", vera=False)
+        qs = [q for q in LABEL_GREEKS if q != "vera"] + [f"{q}_fwd" for q in FORWARD_GREEKS]
+        out.update({q: am[q] for q in qs})
+        out.update({f"berm_{q}": be[q] for q in qs})
+        out["ex_region"], out["berm_ex_region"] = am["ex_region"], be["ex_region"]
+    elif part in REF_PARTS:
         res = label_reference(spec)
         out.update({q: res[q] for q in LABEL_GREEKS})
         out.update({f"{q}_fwd": res[f"{q}_fwd"] for q in FORWARD_GREEKS})
@@ -408,7 +466,8 @@ def main():
     ap.add_argument("cmd", choices=["run", "local", "report", "count"])
     ap.add_argument("--part", required=True,
                     choices=["european", "american", "tournament", "reference", "timing", "production_check",
-                             "production_avg", "stage2", "stage2_ref", "stage2_noise"])
+                             "production_avg", "stage2", "stage2_ref", "stage2_noise",
+                             "amd_check", "amd_check_ref", "amd_random", "amd_random_ref"])
     ap.add_argument("--out", required=True)
     ap.add_argument("--task", type=int, default=0)
     ap.add_argument("--ntasks", type=int, default=1)
