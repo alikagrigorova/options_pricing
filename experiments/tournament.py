@@ -12,6 +12,17 @@ Parts (one job = one label = option x replication x variant):
                per option, 8 variants
   reference  : reference.label_reference for the tournament options
 
+Stage 2 (the default label, MultiConfig(): D2, hybrid of the out-of-sample and
+in-sample labels; experiments/stage2_report.py):
+  stage2       : N_STAGE2 options on the same scrambled Sobol sequence as the
+                 tournament (inputs(N_STAGE2); its first N_OPTIONS points are the
+                 tournament options), 1 label per option
+  stage2_ref   : reference.label_reference for the stage2 options
+  stage2_noise : every NOISE_STEP-th stage2 option (200), NOISE_REPS labels each,
+                 seeds independent of the stage2 labels
+  Pilot: stage2 and stage2_ref with --limit 500 (the first 500 options). Run the
+  full parts later with the same --ntasks and --out: the pilot's labels are kept.
+
 Seeds depend only on (part, option, replication), never on the variant, so
 variants are paired. Task i of n runs every n-th job; rows are written to
 <out>/<part>/task_<i>/chunk_<k>.parquet every --chunk labels, and a restarted
@@ -56,8 +67,24 @@ from simgreeks.runner import job_seed  # noqa: E402
 S0 = 40.0
 N_OPTIONS = 2500
 INPUT_SEED = 20261011
-BASE_SEED = {"european": 8001, "american": 8002, "tournament": 8003}
-REPS = {"european": 100, "american": 50, "tournament": 1}
+BASE_SEED = {"european": 8001, "american": 8002, "tournament": 8003, "production_check": 8004,
+             "production_avg": 8005, "stage2": 8006, "stage2_noise": 8007}
+REPS = {"european": 100, "american": 50, "tournament": 1, "production_check": 100, "production_avg": 100,
+        "stage2": 1, "stage2_noise": 30}
+N_STAGE2 = 10_000
+NOISE_STEP = 50                 # stage2_noise: options 0, 50, ..., 9950
+REF_PARTS = ("reference", "stage2_ref")
+# production check: the 33 American check options plus r0 = d0 = 1 %, K = 40, 44 (sigma 20 %, T = 1)
+EXTRA_CELLS = [(1.0, 0.20, 0.01, 0.01, 40), (1.0, 0.20, 0.01, 0.01, 44)]
+PROD_VARIANT = "D2-prod"     # MultiConfig() defaults: D2, out-of-sample rule, 100,000 paths per run
+# Extra variants, run on request (--variants) and included in the reports:
+#   D3o3-oos  : D3 with order 3 in sigma, r and d at t = 0 (instead of 2 in r, d), tournament budget
+#   D3o3-prod : the same with production settings, 100,000 main + 100,000 pilot paths per run
+ORDER3 = (("sigma", 3), ("r", 3), ("d", 3))
+#   D2-avg    : D2-prod plus the in-sample label on the same main paths; stores the
+#               out-of-sample label (plain columns), <greek>_ins and <greek>_avg
+EXTRA_VARIANTS = ["D3o3-oos", "D3o3-prod", PROD_VARIANT, "D2-avg"]
+STAGE2_VARIANT = "D2-hybrid"   # MultiConfig() defaults: the default label
 VARIANTS = [f"{d}-{rule}" for d in DESIGNS for rule in ("oos", "ins")]
 EU_VARIANTS = ["D3-eu", "D4-eu"]
 INPUT_COLS = ["S0", "K", "sigma", "r", "d", "T"]
@@ -93,8 +120,14 @@ def inputs(n: int = N_OPTIONS) -> pd.DataFrame:
 def options(part: str) -> pd.DataFrame:
     if part == "tournament" or part == "reference":
         return inputs()
+    if part in ("stage2", "stage2_ref"):
+        return inputs(N_STAGE2)
+    if part == "stage2_noise":
+        return inputs(N_STAGE2).iloc[::NOISE_STEP].reset_index(drop=True)
     from experiments.multi_check import american_grid, european_grid
     cells = european_grid() if part == "european" else american_grid()
+    if part in ("production_check", "production_avg"):
+        cells = cells + EXTRA_CELLS
     rows = [dict(id=i, S0=S0, K=float(K), sigma=s, r=r, d=d, T=T)
             for i, (T, s, r, d, K) in enumerate(cells)]
     return pd.DataFrame(rows)
@@ -106,6 +139,17 @@ def spec_of(row) -> PutSpec:
 
 
 def config_of(variant: str) -> MultiConfig:
+    if variant == PROD_VARIANT:
+        return MultiConfig(label_source="oos")
+    if variant == "D2-avg":
+        return MultiConfig(insample_too=True, label_source="oos")
+    if variant == STAGE2_VARIANT:
+        return MultiConfig()
+    if variant == "D3o3-oos":
+        # the tournament's alpha_d rule (min(0.03, r0)), so only the t = 0 order differs from D3-oos
+        return design_config("D3", "pilot", t0_max_order=ORDER3, alpha_d_shrink="r0")
+    if variant == "D3o3-prod":
+        return design_config("D3", "pilot", budget=300_000, t0_max_order=ORDER3)
     design, rule = variant.split("-")
     if rule == "eu":
         return design_config(design, style="european", control_variate=False)
@@ -116,9 +160,12 @@ def jobs_of(part: str, limit: int | None = None, variants=None):
     opts = options(part)
     if limit:
         opts = opts.iloc[:limit]
-    if part == "reference":
+    if part in REF_PARTS:
         return [(int(i), 0, "reference") for i in opts.id]
-    vs = variants or (EU_VARIANTS if part == "european" else VARIANTS)
+    vs = variants or (EU_VARIANTS if part == "european" else
+                      [STAGE2_VARIANT] if part.startswith("stage2") else
+                      [PROD_VARIANT] if part == "production_check" else
+                      ["D2-avg"] if part == "production_avg" else VARIANTS)
     return [(int(i), rep, v) for i in opts.id for rep in range(REPS[part]) for v in vs]
 
 
@@ -141,7 +188,7 @@ def one(part: str, opts: pd.DataFrame, job, mem: bool) -> dict:
     if mem:
         tracemalloc.start()
     t = time.perf_counter()
-    if part == "reference":
+    if part in REF_PARTS:
         res = label_reference(spec)
         out.update({q: res[q] for q in LABEL_GREEKS})
         out.update({f"{q}_fwd": res[f"{q}_fwd"] for q in FORWARD_GREEKS})
@@ -152,7 +199,10 @@ def one(part: str, opts: pd.DataFrame, job, mem: bool) -> dict:
         res = label(spec, config_of(variant), seed)
         out.update({q: float(res.get(q, np.nan)) for q in OUT_GREEKS})
         out.update({k: res.get(k, np.nan) for k in EXTRA})
-        out["design"], out["rule"] = variant.split("-")
+        out.update({k: v for k, v in res.items() if k.endswith(("_oos", "_ins", "_avg"))})
+        if "default_source" in res:
+            out["default_source"] = res["default_source"]
+        out["design"], out["rule"] = variant.split("-")[0], variant.split("-")[-1]
     out["seconds"] = time.perf_counter() - t
     if mem:
         out["peak_mb"] = tracemalloc.get_traced_memory()[1] / 2 ** 20
@@ -231,7 +281,7 @@ def check_reference(part: str, out: str) -> pd.DataFrame:
 def report_check(part: str, out: str) -> str:
     """(a) flags, median / max abs(bias) %, median noise % of one label, per variant and Greek."""
     lab, ref = load(part, out), check_reference(part, out).set_index("id")
-    variants = [v for v in (EU_VARIANTS if part == "european" else VARIANTS)
+    variants = [v for v in (EU_VARIANTS if part == "european" else VARIANTS + EXTRA_VARIANTS)
                 if v in set(lab.variant)]
     lines = [f"# {part} check: {lab.groupby('variant').size().to_dict()} labels\n",
              "Per variant and Greek: options flagged (|mean - ref| / (sd / sqrt(reps)) > 2.576) / "
@@ -281,7 +331,7 @@ def report_tournament(out: str, base: str = "D2-oos") -> str:
     lab = load("tournament", out)
     ref = load("reference", out).drop_duplicates("id").set_index("id")
     opts = inputs().set_index("id")
-    variants = [v for v in VARIANTS if v in set(lab.variant)]
+    variants = [v for v in VARIANTS + EXTRA_VARIANTS if v in set(lab.variant)]
     lines = [f"# Tournament: {lab.groupby('variant').size().to_dict()} labels, "
              f"{len(ref)} reference values\n",
              "e = (label - ref) / abs(ref), over the options with abs(ref) above 1 % of the "
@@ -357,7 +407,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["run", "local", "report", "count"])
     ap.add_argument("--part", required=True,
-                    choices=["european", "american", "tournament", "reference", "timing"])
+                    choices=["european", "american", "tournament", "reference", "timing", "production_check",
+                             "production_avg", "stage2", "stage2_ref", "stage2_noise"])
     ap.add_argument("--out", required=True)
     ap.add_argument("--task", type=int, default=0)
     ap.add_argument("--ntasks", type=int, default=1)

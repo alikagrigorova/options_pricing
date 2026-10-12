@@ -211,7 +211,8 @@ from simgreeks.core import PutSpec
 from simgreeks.multi import MultiConfig, label
 label(PutSpec(S0=40, K=40, sigma=0.2, r=0.06, d=0.0, T=1.0), MultiConfig(), seed=1)
 # -> price, delta, gamma, theta, vega, volga, vanna, rho, phi (dP/dd, dividend Rho),
-#    delta_r, delta_d, ex_region, european_region, alpha_S, alpha_sigma, alpha_r, alpha_d
+#    delta_r, delta_d, ex_region, european_region, alpha_S, alpha_sigma, alpha_r, alpha_d,
+#    <greek>_oos, <greek>_ins, <greek>_avg and default_source (see "The default label")
 #    (with a joint design, also vera, dvega_dd, drho_dd; see "Label designs" below)
 ```
 
@@ -355,7 +356,7 @@ were produced with α_r = α_d = 0.02 and no shrinking or European region.
 |---|---|---|
 | α_S, α_σ | Paper's selector (Appendix A.2, M = ν + 1) on the pilot paths | Tables 4–5 reproduced with M = ν + 1 |
 | α_r, α_d (r0 ≥ 3 %) | Fixed 0.03 | Width sweep 0.01–0.10 (9 options, paired): noise ∝ 1/α, bias grows above 0.05; 0.03–0.04 gives the lowest error once labels are averaged |
-| α_r, α_d (0 < r0 < 3 %) | min(0.03, r0) (`alpha_r_shrink`, `alpha_d_shrink="r0"`) | 200-rep paired check at r0 = 0.5 %, 1 %: Rho unbiased on 9/12 options (current window: 0/12), Phi 9/12 (current 1/12); the d0 window is worse. Cost: Rho noise 11–29 % per label, Phi 13–38 % |
+| α_r, α_d (0 < r0 or d0 < 3 %) | α_r = min(0.03, r0) (`alpha_r_shrink`); α_d = min(0.03, d0) (`alpha_d_shrink="d0"`, default since the production check; the earlier evidence used min(0.03, r0)) | 200-rep paired check at r0 = 0.5 %, 1 %: Rho unbiased on 9/12 options (current window: 0/12), Phi 9/12 (current 1/12); the d0 window is worse. Cost: Rho noise 11–29 % per label, Phi 13–38 % |
 | r0 ≤ 0, d0 ≥ 0 | Exact European label (`european_region`) | No early exercise there: price, Δ, Γ, Θ, Vega match the Bermudan reference to 3 decimals; Rho, Phi are the no-exercise-side values |
 | Selector for α_r, α_d | Off | Selected widths vary ±30 % per label; Rho, Phi noise +15–23 %, no bias gain |
 | Kink basis in r (`kink_r`) | Off | No consistent bias gain, ≈2× noise, worse price and Γ |
@@ -363,7 +364,8 @@ were produced with α_r = α_d = 0.02 and no shrinking or European region.
 | Exercise-rule control variate (Y − D) | Removed | Price −0.23 % instead of −0.12 % (`results/diagnostics/price_bias/rule_cv`) |
 | t1 control variate | On | Paired check without it: noise 1.5–1.8× (`results/multi_check_american_no_cv_vs_american.md`) |
 | Exercise at t1 | By the rule, not max(Z, Ĉ) | max(Z, Ĉ) biased Volga +34 % |
-| Exercise rule | Refitted on the rescaled pilot paths, applied out of sample | In-sample rule biased Volga +50 % |
+| Exercise rule | Refitted on the rescaled pilot paths, applied out of sample; in addition refitted in sample on the main paths | In-sample rule alone biased Volga +50 % |
+| Label (plain columns, `label_source="hybrid"`) | Average of the out-of-sample and in-sample labels for price, Δ, Γ, Θ, Vega, Rho, Phi; out-of-sample for Volga, Vanna, ∂Δ/∂r, ∂Δ/∂d | Production check of D2-avg and Stage 2 (below): the two labels are biased in opposite directions; the in-sample Volga is biased +23 % to +69 % |
 | N_pilot = N | 100,000 each | 4× pilot paths did not remove the price bias (`results/diagnostics/price_bias/pilot_size.md`) |
 
 Reference values near r = 0: `put_fd_greeks(..., one_sided=("r", "d"))` gives
@@ -374,9 +376,12 @@ r0 ≥ 0.5 % central and forward bumps agree.
 Open issues:
 - Rho and Phi stay 3–4 % off at r0 = d0 = 1 % (K = 40, 44) with every window
   tried; the cause is unknown (the window does not cross r = 0 there).
-- The price is about 0.1 % low: an estimated exercise rule is suboptimal, so the
-  price is a lower bound; Δ inherits it. Shrinking the r and d windows adds
-  0.04–0.10 percentage points at small r0.
+- Out of sample the price is about 0.15 % low (an estimated exercise rule is
+  suboptimal, so the price is a lower bound) and Δ about 0.3 % high; the
+  hybrid default removes this (see "The default label").
+- Volga (out of sample) is about 10 % of its typical size too low, most of it
+  deep in the money; Rho and Phi have 2–8 % biases of opposite sign at single
+  options where r and d are both 2–4 % and close (Stage 2 noise check).
 - Labels are Bermudan (exercise on 50 dates per year), 0.2–0.3 % below American
   values.
 
@@ -410,13 +415,72 @@ bumps with the r bump ≤ r0/2, forward bumps for Rho and Phi, European values a
 r0 ≤ 0, d0 ≥ 0). It runs as SGE job arrays on the BU SCC (`scc/README.md`).
 
 Results (`results/tournament/`): in-sample exercise rules bias Volga (+35 to +72 %)
-and are out. **D2-oos**, the current default, is the only design with unbiased
+and are out as a label on their own. **D2-oos** was the only design with unbiased
 Rho, Phi and Vega overall and in every region, and the least noisy for price,
-Δ, Γ, Θ; it is the recommendation. D3-oos is 2–4× cheaper per unit of accuracy
+Δ, Γ, Θ, and was recommended. D3-oos is 2–4× cheaper per unit of accuracy
 for Rho, Phi, Volga and the cross terms and adds Vera, but its Rho (−1.1 %), Phi
 (+0.6 %) and Vega (−0.6 %) are biased, likely from the order-2 cap in r and d at
 t = 0. D4-oos is the least noisy for every parameter Greek but costs 4.5× the
 time per label. D1-oos has no advantage.
+
+Outcome: D2 stays the production design. The D3 variant with order 3 in r and d
+(`results/production_check/report_D3.md`, `d3_order3_comparison.md`) fixes
+price and Δ only because its price comes from a run in S alone, and adds a
+Rho bias (+0.7 %); the hybrid default below fixes price and Δ within D2.
+
+### The default label (`label_source="hybrid"`) and Stage 2
+
+Each run of a label fits the exercise rule twice: out of sample on the
+rescaled pilot paths (**oos**, a lower bound: price low, Δ high) and in sample
+on its own main paths (**ins**, biased the other way, price high). Both labels
+use the same paths and widths, and their errors are strongly correlated
+(ρ ≈ 0.92), so their average **avg** has the same noise as either and most of
+the bias cancels. The in-sample label biases Volga upwards, so the default
+takes avg for price, Δ, Γ, Θ, Vega, Rho and Phi and oos for Volga, Vanna,
+∂Δ/∂r and ∂Δ/∂d. All three are returned (`<greek>_oos`, `_ins`, `_avg`) and
+`default_source` names the source of each plain column; `label_source="oos"`
+gives the previous default. Cost: about 1.9× the oos label (15 s per label on
+the SCC).
+
+Production check of D2-avg (`results/production_check/report_avg.md`; the 33
+American check options + r0 = d0 = 1 %, 100 labels each): options with
+|t| > 3 for the price fall from 21 (oos) to 0, for Δ from 10 to 1; largest
+price bias 0.10 % (D2-prod 0.48 %).
+
+**Stage 2** (`results/stage2/report.md`, data in `labels.parquet`,
+`noise.parquet`): 10,000 options on the tournament's Sobol sequence (S0/K
+0.85–1.20, σ 10–40 %, T 0.25–2, d 0–4 %, r 0–6 % with 25 % in (0, 3 %) and 2 %
+at 0), one default label each against the PDE reference
+(`experiments/tournament.py --part stage2 / stage2_ref`,
+`experiments/stage2_report.py`), and 200 of them × 30 labels for the noise.
+Bias = mean over the options of the signed relative error (label − PDE)/|PDE|
+(options with |PDE| ≥ 1 % of the Greek's largest; 313 options with exact labels
+left out), ± se = sd/√n; scaled bias = mean of (label − PDE) over all options /
+mean |PDE| (for Greeks that cross zero). Typical error = mean |relative error|
+of one label (mostly noise).
+
+| Greek | bias (t) | scaled bias (t) | oos bias (t) | ins bias (t) | typical error | median error |
+|---|---|---|---|---|---|---|
+| price | −0.003 ± 0.002 % (−1.1) | −0.006 % (−2.7) | −0.152 % (−59) | +0.147 % (+55) | 0.17 % | 0.12 % |
+| Δ | −0.021 ± 0.011 % (−1.9) | −0.009 % (−0.7) | +0.275 % (+24) | −0.317 % (−28) | 0.78 % | 0.57 % |
+| Γ | +0.06 ± 0.12 % (+0.5) | +0.09 % (+0.7) | −1.03 % (−8.2) | +1.16 % (+9.1) | 8.3 % | 5.7 % |
+| Θ | −0.11 ± 0.28 % (−0.4) | −0.09 % (−0.6) | +1.15 % (+4.0) | −1.38 % (−4.8) | 14 % | 7.2 % |
+| Vega | −0.11 ± 0.08 % (−1.4) | +0.01 % (+0.2) | −0.30 % (−3.5) | +0.07 % (+0.9) | 4.0 % | 2.2 % |
+| Volga (oos) | −3.9 ± 4.3 % (−0.9) | −9.7 % (−3.7) | = default | +68.8 % (+15.6) | 146 % | 46 % |
+| Vanna (oos) | +4.4 ± 1.5 % (+3.0) | +1.9 % (+1.9) | = default | +2.7 % (+1.8) | 72 % | 36 % |
+| Rho | −0.10 ± 0.11 % (−0.9) | −0.15 % (−1.5) | +0.33 % (+2.8) | −0.53 % (−4.7) | 7.0 % | 5.0 % |
+| Phi | +0.8 ± 1.9 % (+0.4) | +0.7 % (+0.4) | +1.3 % (+0.7) | +0.4 % (+0.2) | 38 % | 8.5 % |
+| ∂Δ/∂r (oos) | +0.7 ± 2.3 % (+0.3) | +0.4 % (+0.4) | = default | +6.8 % (+2.8) | 105 % | 47 % |
+| ∂Δ/∂d (oos) | −139 ± 71 % (−2.0) | −37 % (−1.6) | = default | −76 % (−1.4) | 751 % | 91 % |
+
+By region (moneyness, T, σ, r and d bins, r < 2 % and d < 2 %) the price and
+Δ biases stay below 0.05 % and 0.1 % (significant only because 10,000 labels
+resolve 0.002 %); Volga's scaled bias is −45 % deep in the money; Rho −0.4 % at
+d ≥ 2 %. The spread of the errors over the options matches the 30-label noise
+(ratio 0.8–1.3 for all Greeks but ∂Δ/∂d), so a single label's error is noise,
+not option-to-option bias. Inside the noise check, Rho and Phi have 2–8 %
+biases of opposite sign at single options with r ≈ d (2–4 %). Time: 15.3 s
+per label and 5.1 s per PDE reference on one SCC core (81 CPU hours in all).
 
 ## Choices the paper leaves open
 

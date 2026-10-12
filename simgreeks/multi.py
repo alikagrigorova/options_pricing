@@ -128,6 +128,16 @@ GREEKS = {
     "drho_dd": (0, 0, 1, 1),     # d2P / dr dd     (needs r and d in one run)
 }
 S_GREEKS = ("price", "delta", "gamma")
+# Default label (MultiConfig.label_source = "hybrid"): the average of the
+# out-of-sample and in-sample labels, except for the Greeks listed here, which
+# keep the out-of-sample label. The out-of-sample price is biased low and its
+# Delta high (the rule fitted on the pilot is suboptimal on the main paths, a
+# lower bound); the in-sample label is biased the other way, and the average
+# removes most of both (production check of D2-avg,
+# results/production_check/report_avg.md). The in-sample Volga is biased up
+# (+23 %), so Volga and the other cross derivatives keep the out-of-sample label.
+HYBRID_OOS = ("volga", "vanna", "delta_r", "delta_d", "vera", "dvega_dd", "drho_dd")
+LABEL_SOURCES = ("hybrid", "avg", "oos")
 
 # Label designs: the runs of one label (each run disperses S and the listed
 # parameters). With a run in S alone, price, Delta and Gamma come from it;
@@ -177,9 +187,12 @@ class MultiConfig:
     rd_floor: bool = False         # one-sided r, d spread [max(0, x0 - alpha), x0 + alpha] when x0 >= 0
     kink_r: bool = False           # truncated-power basis in r with a knot at r = 0 (see kink_index)
     alpha_r_shrink: bool = True    # fixed alpha_r = min(alpha_r, r0) for r0 > 0, so the window stays in r >= 0
-    alpha_d_shrink: str = "r0"     # fixed alpha_d = min(alpha_d, r0) ("r0") or min(alpha_d, d0) ("d0") when > 0; "" off
+    alpha_d_shrink: str = "d0"     # fixed alpha_d = min(alpha_d, d0) ("d0") or min(alpha_d, r0) ("r0") when > 0; "" off
     european_region: bool = True   # r0 <= 0 and d0 >= 0: exact European label (see label)
     t0_max_order: tuple = ()       # t = 0 basis: (param, max exponent) caps, e.g. (("r", 2), ("d", 2))
+    insample_too: bool = False     # also the in-sample label on the same main paths (<greek>_ins, <greek>_avg)
+    label_source: str = "hybrid"   # plain <greek> keys: "hybrid" (avg, but oos for HYBRID_OOS), "avg" or
+    #                                "oos" (D2-prod); "hybrid" and "avg" imply insample_too
 
     def __post_init__(self):
         for dims in self.groups:
@@ -194,6 +207,8 @@ class MultiConfig:
                 raise ValueError(f"unknown {name} {value!r}")
         if not set(self.select) <= set(DIMS):
             raise ValueError(f"select must be a subset of {DIMS}")
+        if self.label_source not in LABEL_SOURCES:
+            raise ValueError(f"unknown label_source {self.label_source!r}")
         if self.alpha_d_shrink not in ("", "r0", "d0"):
             raise ValueError(f"unknown alpha_d_shrink {self.alpha_d_shrink!r}")
         if self.rd_unit not in ("pilot", "raw"):
@@ -685,8 +700,15 @@ def run_group(spec: PutSpec, cfg: MultiConfig, dims, seed) -> dict:
     rng = np.random.default_rng(seed)
     alphas, scale, rules = pilot(spec, cfg, dims, rng)
     z = isd_multi(spec, cfg, alphas, rng)
-    _, Y, _ = lsm_multi(spec, cfg, z, brownian(spec, cfg.N, rng), scale, rules)
-    out = greeks_multi(spec, cfg, dims, z, Y, bs_put(spec) if cfg.control_variate else None)
+    W = brownian(spec, cfg.N, rng)
+    _, Y, _ = lsm_multi(spec, cfg, z, W, scale, rules)
+    add = bs_put(spec) if cfg.control_variate else None
+    out = greeks_multi(spec, cfg, dims, z, Y, add)
+    if _with_ins(cfg) and cfg.style == "bermudan" and rules is not None:
+        # the in-sample label: the exercise rule refitted on these main paths and
+        # applied to them (no random numbers used, so the label above is unchanged)
+        _, Y_ins, _ = lsm_multi(spec, cfg, z, W, alphas, None)
+        out["ins"] = greeks_multi(spec, cfg, dims, z, Y_ins, add)
     out.update({f"alpha_{k}": float(v) for k, v in alphas.items()})
     return out
 
@@ -701,6 +723,22 @@ def label(spec: PutSpec, cfg: MultiConfig, seed) -> dict:
     ss = seed if isinstance(seed, np.random.SeedSequence) else np.random.SeedSequence(seed)
     runs = [run_group(spec, cfg, dims, child)
             for dims, child in zip(cfg.groups, ss.spawn(len(cfg.groups)))]
+    out = _assemble(spec, cfg, runs)
+    if _with_ins(cfg) and all("ins" in r for r in runs):
+        ins = _assemble(spec, cfg, [r["ins"] for r in runs])
+        _add_ins_avg(out, ins)
+        _set_default(out, cfg)
+    for k in DIMS:
+        vals = [r[f"alpha_{k}"] for r in runs if f"alpha_{k}" in r]
+        if vals:
+            out[f"alpha_{k}"] = float(np.mean(vals))
+    return out
+
+
+def _assemble(spec: PutSpec, cfg: MultiConfig, runs) -> dict:
+    """Label from the runs' Greeks: price, Delta, Gamma from the run in S alone if
+    any, else averaged; the others from the runs that identify them; Theta from
+    the PDE identity; exercise values when exercising at t_0 is optimal."""
     out = {}
     s_only = [r for dims, r in zip(cfg.groups, runs) if tuple(dims) == ("S",)]
     for name in GREEKS:                # only the Greeks some group identifies
@@ -714,11 +752,36 @@ def label(spec: PutSpec, cfg: MultiConfig, seed) -> dict:
         # exercising at t_0 is optimal: V = K - S, so only Delta is non-zero
         out.update({k: 0.0 for k in OUTPUTS if k in out})
         out["price"], out["delta"] = spec.K - spec.S0, -1.0
-    for k in DIMS:
-        vals = [r[f"alpha_{k}"] for r in runs if f"alpha_{k}" in r]
-        if vals:
-            out[f"alpha_{k}"] = float(np.mean(vals))
     return out
+
+
+def _add_ins_avg(out: dict, ins: dict) -> None:
+    """Add the in-sample label as <greek>_ins and the average of the out-of-sample
+    and in-sample labels as <greek>_avg (MultiConfig.insample_too). The plain
+    keys stay the out-of-sample label."""
+    for k in OUTPUTS:
+        if k in out and k in ins:
+            out[f"{k}_ins"] = ins[k]
+            out[f"{k}_avg"] = 0.5 * (out[k] + ins[k])
+    out["ex_region_ins"] = ins["ex_region"]
+
+
+def _with_ins(cfg: MultiConfig) -> bool:
+    return cfg.insample_too or cfg.label_source != "oos"
+
+
+def _set_default(out: dict, cfg: MultiConfig) -> None:
+    """Keep the out-of-sample label as <greek>_oos and set the plain keys to the
+    default label (MultiConfig.label_source); default_source says which it is."""
+    srcs = {"avg": [], "oos": []}
+    for k in OUTPUTS:
+        if f"{k}_avg" not in out:
+            continue
+        out[f"{k}_oos"] = out[k]
+        src = "oos" if cfg.label_source == "oos" or (cfg.label_source == "hybrid" and k in HYBRID_OOS) else "avg"
+        out[k] = out[f"{k}_{src}"]
+        srcs[src].append(k)
+    out["default_source"] = "; ".join(f"{m}: {' '.join(v)}" for m, v in srcs.items() if v)
 
 
 def european_label(spec: PutSpec, cfg: MultiConfig) -> dict:
@@ -737,6 +800,9 @@ def european_label(spec: PutSpec, cfg: MultiConfig) -> dict:
     out = {k: float(eu[k]) for k in OUTPUTS if k in eu and k != "vera"}
     out["ex_region"] = False
     out["european_region"] = True
+    if _with_ins(cfg):                 # exact: the in-sample and average labels are the same
+        _add_ins_avg(out, dict(out))
+        _set_default(out, cfg)
     for dims in cfg.groups:
         for k, v in fixed_widths(spec, cfg, dims).items():
             out[f"alpha_{k}"] = 0.0
@@ -753,4 +819,5 @@ def design_config(design: str, exercise_rule: str = "pilot", budget: int = 400_0
     n = int(round(budget / len(groups)))
     if design in ("D3", "D4"):          # joint runs: order 3 in sigma, 2 in r and d
         kw.setdefault("t0_max_order", (("sigma", 3), ("r", 2), ("d", 2)))
+    kw.setdefault("label_source", "oos")   # the tournament's labels
     return MultiConfig(groups=groups, N=n, N_pilot=n, exercise_rule=exercise_rule, **kw)
