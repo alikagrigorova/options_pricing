@@ -77,8 +77,13 @@ Price, Delta and Gamma come from the run in S alone when the design has one
 (DESIGNS D1, D3), else they are averaged over the runs; each parameter Greek
 comes from the run(s) that disperse its parameters; Theta follows from the PDE identity
 (core.theta_pde). With american_t0=True (default), an option whose continuation
-value is at or below K - S0 is exercised at t_0: price K - S0, Delta -1 and all
-other Greeks 0.
+value is at or below its exercise value at S0 is exercised at t_0: price K - S0
+and Delta -1 (put) or S0 - K and +1 (call), all other Greeks 0.
+
+Calls (PutSpec(kind="call")) use the same machinery with the payoff
+max(S - K, 0) and the European call as control variate; the exact European
+label applies at d0 <= 0 <= r0. The exercise dates are spec.J = round(
+steps_per_year T): 50 a year in the paper, 252 for daily exercise.
 """
 from __future__ import annotations
 
@@ -95,7 +100,7 @@ from scipy.special import ndtr
 from scipy.stats import qmc
 
 from .core import PutSpec, isd_kernel, theta_pde
-from .reference import bs_put
+from .reference import bs_option
 from .selector import ALPHA_CAP, S_REF, select_alpha
 
 DIMS = ("S", "sigma", "r", "d")
@@ -191,6 +196,8 @@ class MultiConfig:
     european_region: bool = True   # r0 <= 0 and d0 >= 0: exact European label (see label)
     t0_max_order: tuple = ()       # t = 0 basis: (param, max exponent) caps, e.g. (("r", 2), ("d", 2))
     insample_too: bool = False     # also the in-sample label on the same main paths (<greek>_ins, <greek>_avg)
+    vf_time: float | None = None   # value-function label at the exercise date nearest this time
+    #                                (None: t_1, the paper's); exercise before it by the rule
     label_source: str = "hybrid"   # plain <greek> keys: "hybrid" (avg, but oos for HYBRID_OOS), "avg" or
     #                                "oos" (D2-prod); "hybrid" and "avg" imply insample_too
 
@@ -391,6 +398,15 @@ def european_put(S, K, tau, sigma, r, d):
     return K * np.exp(-r * tau) * ndtr(sq - d1) - S * np.exp(-d * tau) * ndtr(-d1)
 
 
+def european_value(spec: PutSpec, S, tau, sigma, r, d):
+    """European put or call (spec.kind) value, vectorised over paths; the call
+    by put-call parity."""
+    put = european_put(S, spec.K, tau, sigma, r, d)
+    if spec.kind == "call":
+        return put + S * np.exp(-d * tau) - spec.K * np.exp(-r * tau)
+    return put
+
+
 # --------------------------------------------------------------------------
 # Bases: (S-part of order <= M) x (parameter monomials of degree <= param_degree)
 # --------------------------------------------------------------------------
@@ -533,6 +549,7 @@ def lsm_multi(spec: PutSpec, cfg: MultiConfig, z: dict, W: np.ndarray, scale: di
         return disc * cash, disc * cash, {}
     Y_vf = None
     fits = {}
+    jv = vf_index(spec, cfg)
     for j in range(J - 1, 0, -1):
         cash *= disc
         Sj = stock_at(spec, z, W, j)
@@ -549,28 +566,46 @@ def lsm_multi(spec: PutSpec, cfg: MultiConfig, z: dict, W: np.ndarray, scale: di
             if fits[j] is not None and itm.any():
                 exercise[itm] = ex[itm] >= _predict(fits[j], Sj[itm], mono[itm], index,
                                                     cfg.M_tau)
-        if j == 1 and value_function:
+        if j < jv and Y_vf is not None:
+            # before the value-function date: the label follows the exercise rule
+            # (premium e^{-r dt} P_{j+1}, or ex - E_j where the rule exercises)
             if cfg.control_variate:
-                tau = spec.T - spec.dt
-                E1 = european_put(Sj, spec.K, tau, z["sigma"], z["r"], z["d"])
+                Ej = european_value(spec, Sj, spec.T - j * spec.dt, z["sigma"], z["r"], z["d"])
+                Y_vf = np.where(exercise, ex - Ej, disc * Y_vf)
+            else:
+                Y_vf = np.where(exercise, ex, disc * Y_vf)
+        if j == jv and value_function:
+            if cfg.control_variate:
+                tau = spec.T - j * spec.dt
+                E1 = european_value(spec, Sj, tau, z["sigma"], z["r"], z["d"])
                 D1 = np.exp(-z["r"] * tau) * euro_payoff
                 prem = _fitted(Sj, mono_vf, index_vf, cash - D1, cfg.M_tau)
                 if cfg.style == "european":
-                    Y_vf = disc * prem
+                    Y_vf = prem
                 elif cfg.vf_rule == "rule":
-                    Y_vf = disc * np.where(exercise, ex - E1, prem)
+                    Y_vf = np.where(exercise, ex - E1, prem)
                 else:
-                    Y_vf = disc * np.maximum(ex - E1, prem)
+                    Y_vf = np.maximum(ex - E1, prem)
             else:
                 cont = _fitted(Sj, mono_vf, index_vf, cash, cfg.M_tau)
                 if cfg.style == "european":
-                    Y_vf = disc * cont
+                    Y_vf = cont
                 elif cfg.vf_rule == "rule":
-                    Y_vf = disc * np.where(exercise, ex, cont)
+                    Y_vf = np.where(exercise, ex, cont)
                 else:
-                    Y_vf = disc * np.maximum(ex, cont)
+                    Y_vf = np.maximum(ex, cont)
         cash = np.where(exercise, ex, cash)
+    if Y_vf is not None:
+        Y_vf = disc * Y_vf
     return disc * cash, Y_vf, fits
+
+
+def vf_index(spec: PutSpec, cfg: MultiConfig) -> int:
+    """Exercise date of the value-function label: t_1, or the date nearest
+    cfg.vf_time (at least t_1, before maturity)."""
+    if cfg.vf_time is None:
+        return 1
+    return int(min(max(1, round(cfg.vf_time / spec.dt)), spec.J - 1))
 
 
 @dataclass
@@ -702,7 +737,7 @@ def run_group(spec: PutSpec, cfg: MultiConfig, dims, seed) -> dict:
     z = isd_multi(spec, cfg, alphas, rng)
     W = brownian(spec, cfg.N, rng)
     _, Y, _ = lsm_multi(spec, cfg, z, W, scale, rules)
-    add = bs_put(spec) if cfg.control_variate else None
+    add = bs_option(spec) if cfg.control_variate else None
     out = greeks_multi(spec, cfg, dims, z, Y, add)
     if _with_ins(cfg) and cfg.style == "bermudan" and rules is not None:
         # the in-sample label: the exercise rule refitted on these main paths and
@@ -718,7 +753,7 @@ def label(spec: PutSpec, cfg: MultiConfig, seed) -> dict:
     group; S-Greeks averaged over the runs; Theta from the PDE identity. Greeks
     no group identifies (Vera with the default groups) are left out. alpha_k
     is the width used for coordinate k, averaged over the runs that disperse it."""
-    if cfg.european_region and cfg.style == "bermudan" and spec.r <= 0 and spec.d >= 0:
+    if cfg.european_region and cfg.style == "bermudan" and spec.no_early_exercise:
         return european_label(spec, cfg)
     ss = seed if isinstance(seed, np.random.SeedSequence) else np.random.SeedSequence(seed)
     runs = [run_group(spec, cfg, dims, child)
@@ -749,9 +784,10 @@ def _assemble(spec: PutSpec, cfg: MultiConfig, runs) -> dict:
     out["theta"], out["ex_region"] = theta_pde(spec, out["price"], out["delta"], out["gamma"])
     out["european_region"] = False
     if cfg.american_t0 and cfg.style == "bermudan" and out["ex_region"]:
-        # exercising at t_0 is optimal: V = K - S, so only Delta is non-zero
+        # exercising at t_0 is optimal: V = K - S (put) or S - K (call), so only
+        # Delta (-1 or +1) is non-zero
         out.update({k: 0.0 for k in OUTPUTS if k in out})
-        out["price"], out["delta"] = spec.K - spec.S0, -1.0
+        out["price"], out["delta"] = spec.intrinsic, spec.sign
     return out
 
 
@@ -785,18 +821,20 @@ def _set_default(out: dict, cfg: MultiConfig) -> None:
 
 
 def european_label(spec: PutSpec, cfg: MultiConfig) -> dict:
-    """Exact label when r0 <= 0 and d0 >= 0 (MultiConfig.european_region).
+    """Exact label where early exercise is never optimal (MultiConfig.european_region):
+    a put with r0 <= 0 <= d0, a call with d0 <= 0 <= r0 (PutSpec.no_early_exercise).
 
-    There, exercising a put early is never optimal: the strike earns no interest
+    For the put, exercising early is never optimal there: the strike earns no interest
     (r <= 0) and selling the stock gives up no positive carry (d >= 0), so the
     Bermudan put equals the European put and so do its price, Delta, Gamma,
     Theta, Vega, Volga and Vanna. Rho and Phi (and delta_r, delta_d) are the
     European ones from the side of the no-exercise region; at r0 = 0 or d0 = 0
     the early-exercise premium on the other side grows faster than linearly
     (only deep in-the-money paths are exercised), so the one-sided derivative
-    from that side converges to the same value, but very slowly.
+    from that side converges to the same value, but very slowly. The call is
+    the mirror image (r and d swap roles).
     """
-    eu = bs_put(spec)
+    eu = bs_option(spec)
     out = {k: float(eu[k]) for k in OUTPUTS if k in eu and k != "vera"}
     out["ex_region"] = False
     out["european_region"] = True

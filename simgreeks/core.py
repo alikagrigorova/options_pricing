@@ -25,7 +25,8 @@ from numpy.polynomial import chebyshev as cheb
 # --------------------------------------------------------------------------
 @dataclass(frozen=True)
 class PutSpec:
-    """American (Bermudan) put under Black-Scholes-Merton dynamics."""
+    """American (Bermudan) put, or call with kind="call", under
+    Black-Scholes-Merton dynamics. The name is kept from the paper's setting."""
 
     S0: float = 40.0
     K: float = 40.0
@@ -33,7 +34,30 @@ class PutSpec:
     r: float = 0.06
     d: float = 0.0          # continuous dividend yield
     T: float = 1.0
-    steps_per_year: int = 50  # J = 50 exercise points per year
+    steps_per_year: int = 50  # J = 50 exercise points per year (252: every business day)
+    kind: str = "put"         # "put" or "call"
+
+    def __post_init__(self):
+        if self.kind not in ("put", "call"):
+            raise ValueError(f"unknown kind {self.kind!r}")
+
+    @property
+    def sign(self) -> float:
+        """+1 for a call, -1 for a put: payoff max(sign (S - K), 0)."""
+        return 1.0 if self.kind == "call" else -1.0
+
+    @property
+    def intrinsic(self) -> float:
+        """Exercise value at S0 (may be negative)."""
+        return self.sign * (self.S0 - self.K)
+
+    @property
+    def no_early_exercise(self) -> bool:
+        """Early exercise is never optimal: a put with r <= 0 <= d, a call with
+        d <= 0 <= r. The option then equals the European one."""
+        if self.kind == "put":
+            return self.r <= 0 and self.d >= 0
+        return self.d <= 0 and self.r >= 0
 
     @property
     def J(self) -> int:
@@ -44,7 +68,7 @@ class PutSpec:
         return self.T / self.J
 
     def payoff(self, S: np.ndarray) -> np.ndarray:
-        return np.maximum(self.K - S, 0.0)
+        return np.maximum(self.sign * (S - self.K), 0.0)
 
 
 # --------------------------------------------------------------------------
@@ -213,14 +237,15 @@ def theta_pde(spec: PutSpec, price: float, delta: float, gamma: float):
     """Theta = dV/dt at t = 0 (calendar time, per year) from the Black-Scholes PDE.
 
     Continuation region: Theta = r V - (r - d) S0 Delta - 1/2 sigma^2 S0^2 Gamma.
-    Exercise region, where immediate exercise is optimal and V = K - S: Theta = 0.
-    S0 is taken to be in the exercise region when price <= K - S0. The estimated
+    Exercise region, where immediate exercise is optimal and V = K - S (put) or
+    S - K (call): Theta = 0. S0 is taken to be in the exercise region when
+    price <= the exercise value at S0. The estimated
     price is the continuation value (LSM has no exercise at t_0), so this is the
     test "exercise now >= continue".
 
     Returns (theta, in_exercise_region).
     """
-    if price <= spec.K - spec.S0:
+    if price <= spec.intrinsic:
         return 0.0, True
     theta = (spec.r * price - (spec.r - spec.d) * spec.S0 * delta
              - 0.5 * spec.sigma ** 2 * spec.S0 ** 2 * gamma)

@@ -1,4 +1,5 @@
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -479,3 +480,61 @@ def test_multi_hybrid_default_label():
                                      "oos: volga vanna delta_r delta_d")
     assert label(spec, MultiConfig(N=20_000, label_source="avg"), np.random.SeedSequence(11))[
         "volga"] == hyb["volga_avg"]
+
+
+def test_call_payoff_and_no_early_exercise_region():
+    call = PutSpec(S0=40, K=36, kind="call")
+    assert np.allclose(call.payoff(np.array([30.0, 40.0])), [0.0, 4.0])
+    assert call.sign == 1.0 and call.intrinsic == 4.0
+    assert PutSpec(r=0.06, d=0.0, kind="call").no_early_exercise
+    assert not PutSpec(r=0.06, d=0.01, kind="call").no_early_exercise
+    assert PutSpec(r=0.0, d=0.01).no_early_exercise and not PutSpec(r=0.01, d=0.0).no_early_exercise
+
+
+def test_reference_call_put_symmetry_and_closed_form():
+    # American and Bermudan: C(S, K, r, d) = P(K, S, d, r) (McDonald-Schroder);
+    # the European call PDE matches the closed form, which satisfies parity
+    from simgreeks.reference import bs_call, bs_put, put_fd
+    c = PutSpec(S0=40, K=36, sigma=0.25, r=0.03, d=0.04, T=0.5, kind="call")
+    p = PutSpec(S0=36, K=40, sigma=0.25, r=0.04, d=0.03, T=0.5)
+    for style in ("american", "bermudan", "european"):
+        assert abs(put_fd(c, style)["price"] - put_fd(p, style)["price"]) < 1e-5
+    e = PutSpec(S0=40, K=42, sigma=0.3, r=0.05, d=0.02, T=1.0, kind="call")
+    f, bc = put_fd(e, "european"), bs_call(e)
+    for q in ("price", "delta", "gamma", "theta"):
+        assert abs(f[q] - bc[q]) < 2e-4 * max(1.0, abs(bc[q]))
+    bp = bs_put(replace(e, kind="put"))
+    assert abs(bc["price"] - bp["price"] - (40 * np.exp(-0.02) - 42 * np.exp(-0.05))) < 1e-12
+
+
+def test_call_label_exact_regions():
+    from simgreeks.multi import MultiConfig, label
+    from simgreeks.reference import bs_call
+    eu = label(PutSpec(S0=40, K=40, r=0.06, d=0.0, kind="call"), MultiConfig(), 1)
+    assert eu["european_region"] and eu["price"] == bs_call(
+        PutSpec(S0=40, K=40, r=0.06, d=0.0, kind="call"))["price"]
+    deep = label(PutSpec(S0=40, K=20, sigma=0.1, r=0.0, d=0.08, T=1.0, kind="call"),
+                 MultiConfig(N=20_000), 2)
+    assert deep["ex_region"] and deep["price"] == 20.0 and deep["delta"] == 1.0
+    assert deep["gamma"] == 0.0
+
+
+def test_call_label_close_to_reference():
+    from simgreeks.multi import MultiConfig, label
+    from simgreeks.reference import label_reference
+    spec = PutSpec(S0=40, K=40, sigma=0.2, r=0.0, d=0.04, T=0.5, kind="call")
+    lab = label(spec, MultiConfig(N=50_000), np.random.SeedSequence(3))
+    ref = label_reference(spec, vera=False)
+    assert abs(lab["price"] / ref["price"] - 1) < 0.01
+    assert abs(lab["delta"] / ref["delta"] - 1) < 0.03
+
+
+def test_multi_vf_time():
+    # vf_time=None and vf_time at the first date give the same label; at daily
+    # dates the value-function date is the one nearest vf_time
+    from simgreeks.multi import MultiConfig, label, vf_index
+    spec = PutSpec(K=40.0, sigma=0.2, T=0.25, r=0.06, d=0.0)
+    a = label(spec, MultiConfig(N=20_000), 4)
+    b = label(spec, MultiConfig(N=20_000, vf_time=0.02), 4)
+    assert all(a[q] == b[q] for q in ("price", "delta", "gamma", "vega", "rho", "phi"))
+    assert vf_index(replace(spec, steps_per_year=252), MultiConfig(vf_time=0.02)) == 5
