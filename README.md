@@ -482,6 +482,11 @@ not option-to-option bias. Inside the noise check, Rho and Phi have 2–8 %
 biases of opposite sign at single options with r ≈ d (2–4 %). Time: 15.3 s
 per label and 5.1 s per PDE reference on one SCC core (81 CPU hours in all).
 
+Before and after averaging on the same 10,000 options, as figures
+(`results/bias_before_after/`, `experiments/plot_bias_before_after.py`): the
+mean error per Greek with 99 % intervals, by input bin, and every label's error
+with its binned median, for the out-of-sample label and the default.
+
 ## Choices the paper leaves open
 
 **Selector** (`simgreeks/selector.py`). Stated in the paper and implemented as
